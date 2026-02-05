@@ -1,0 +1,1 @@
+echo '{{CREDENTIALS}}' > ~/.claude/.credentials.json

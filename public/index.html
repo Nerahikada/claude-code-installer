@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Claude Code のインストールとトークン更新のためのコマンドを提供">
+    <title>Claude Code インストーラー</title>
+    <link rel="icon" href="favicon.ico">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/themes/prism-tomorrow.min.css">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <main class="container">
+        <header>
+            <h1>Claude Code Installer</h1>
+        </header>
+
+        <article class="card">
+            <nav class="tabs" id="mode-tabs" role="tablist" aria-label="モード選択">
+                <button class="tab active" data-mode="install" role="tab" aria-selected="true" aria-controls="code-panel">
+                    インストール
+                </button>
+                <button class="tab" data-mode="token" role="tab" aria-selected="false" aria-controls="code-panel">
+                    トークン更新
+                </button>
+            </nav>
+
+            <div class="os-group" id="os-group" role="group" aria-label="OS選択">
+                <button class="os-btn active" data-os="linux" aria-pressed="true">Linux</button>
+                <button class="os-btn" data-os="macos" aria-pressed="false">macOS</button>
+                <button class="os-btn" data-os="windows" aria-pressed="false">Windows</button>
+            </div>
+
+            <section class="code-block" id="code-panel" role="tabpanel">
+                <button class="copy-btn" id="copy-btn" type="button" aria-label="コードをコピー">
+                    <svg id="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                </button>
+                <pre><code id="code-display" class="language-bash"></code></pre>
+            </section>
+        </article>
+
+        <footer>
+            <p>ターミナルに貼り付けて実行してください</p>
+        </footer>
+    </main>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/prism.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/components/prism-bash.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.30.0/components/prism-powershell.min.js"></script>
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>
