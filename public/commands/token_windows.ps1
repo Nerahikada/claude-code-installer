@@ -1,1 +1,1 @@
-"{{CREDENTIALS}}" | Out-File -FilePath "$env:USERPROFILE\.claude\.credentials.json" -Encoding utf8
+'{{CREDENTIALS}}' | Out-File -FilePath "$env:USERPROFILE\.claude\.credentials.json" -Encoding utf8
