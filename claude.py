@@ -110,6 +110,15 @@ class Credentials:
         """Returns the current access token."""
         return self._data.get('claudeAiOauth', {}).get('accessToken', '')
 
+    @property
+    def refresh_token(self) -> str:
+        """Returns the current refresh token."""
+        return self._data.get('claudeAiOauth', {}).get('refreshToken', '')
+
+    def has_same_tokens(self, other: Credentials) -> bool:
+        """Check if access and refresh tokens are identical."""
+        return self.access_token == other.access_token and self.refresh_token == other.refresh_token
+
     def __str__(self) -> str:
         return self._raw
 
@@ -163,8 +172,8 @@ class Credentials:
             fp.seek(0)
             new_creds = Credentials(fp.read().decode())
 
-            if new_creds == self:
-                logger.debug('Credentials unchanged after refresh')
+            if new_creds.has_same_tokens(self):
+                logger.debug('Tokens unchanged after refresh (only expiresAt may have changed)')
                 if self.is_expired:
                     logger.debug('Credentials are expired, re-login required')
                     return None
