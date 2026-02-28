@@ -158,6 +158,7 @@ class Credentials:
                     docker.run,
                     'ghcr.io/nerahikada/hello-claude',
                     volumes=[(fp.name, '/root/.claude/.credentials.json')],
+                    pull='always',
                     remove=True,
                 )
             except DockerException as e:
