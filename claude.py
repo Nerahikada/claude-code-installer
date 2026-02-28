@@ -92,8 +92,9 @@ class Credentials:
     """Manages Claude AI OAuth credentials with refresh capability."""
 
     def __init__(self, credentials: str) -> None:
-        self._data = self._parse(credentials)
         self._raw = credentials
+        self._data = self._parse(credentials)
+        self._oauth = self._data['claudeAiOauth']
 
     @staticmethod
     def _parse(credentials: str) -> dict:
@@ -108,8 +109,7 @@ class Credentials:
 
     @property
     def expires_at(self) -> float:
-        """Returns expiration time as Unix timestamp in seconds."""
-        return self._data.get('claudeAiOauth', {}).get('expiresAt', 0) / 1000
+        return self._oauth.get('expiresAt', 0) / 1000
 
     @property
     def is_expired(self) -> bool:
@@ -117,13 +117,11 @@ class Credentials:
 
     @property
     def access_token(self) -> str:
-        """Returns the current access token."""
-        return self._data.get('claudeAiOauth', {}).get('accessToken', '')
+        return self._oauth.get('accessToken', '')
 
     @property
     def refresh_token(self) -> str:
-        """Returns the current refresh token."""
-        return self._data.get('claudeAiOauth', {}).get('refreshToken', '')
+        return self._oauth.get('refreshToken', '')
 
     def has_same_tokens(self, other: Credentials) -> bool:
         """Check if access and refresh tokens are identical."""

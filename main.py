@@ -13,15 +13,13 @@ from serv import run_server, RequestEvent, request_events
 async def keep_claude_fresh(cred_path: Path) -> None:
     while True:
         try:
-            with open(cred_path, 'r') as f:
-                creds = Credentials(f.read())
+            creds = Credentials(cred_path.read_text())
             if creds.is_expired:
                 new_creds = await creds.refresh()
                 if new_creds is None:
                     logger.error(f'Re-login required to refresh credentials ({cred_path})')
                 else:
-                    with open(cred_path, 'w') as f:
-                        f.write(str(new_creds))
+                    cred_path.write_text(str(new_creds))
                     logger.info(f'Credentials refreshed and saved to {cred_path}')
         except Exception as e:
             logger.error(f'Failed to refresh credentials ({cred_path}): {e}')
@@ -29,33 +27,23 @@ async def keep_claude_fresh(cred_path: Path) -> None:
 
 
 async def generate_new_credentials(src: Path, dest: Path) -> None:
-    with open(src, 'r') as f_src:
-        src_creds = Credentials(f_src.read())
-    creds1, creds2 = await asyncio.gather(
+    src_creds = Credentials(src.read_text())
+    results = await asyncio.gather(
         src_creds.refresh(force=True),
         src_creds.refresh(force=True),
         return_exceptions=True,
     )
+    valid = [r for r in results if isinstance(r, Credentials)]
 
-    # 2 OK
-    if isinstance(creds1, Credentials) and isinstance(creds2, Credentials):
-        with open(src, 'w') as f_src:
-            f_src.write(str(creds1))
-        with open(dest, 'w') as f_dest:
-            f_dest.write(str(creds2))
+    if len(valid) == 2:
+        src.write_text(str(valid[0]))
+        dest.write_text(str(valid[1]))
         logger.info(f'Successfully generated new credentials to {dest}')
-    
-    # 1 OK
-    elif isinstance(creds1, Credentials) or isinstance(creds2, Credentials):
-        valid_creds = creds1 if isinstance(creds1, Credentials) else creds2
-        with open(src, 'w') as f_src:
-            f_src.write(str(valid_creds))
+    elif len(valid) == 1:
+        src.write_text(str(valid[0]))
         logger.warning('Only one set of credentials was refreshed, retrying...')
         await generate_new_credentials(src, dest)
-    
-    # 0 OK
     else:
-        logger.error('Failed to refresh credentials concurrently')
         raise RuntimeError(f'Failed to generate new credentials from {src} to {dest}')
 
 
