@@ -174,12 +174,14 @@ class Credentials:
             new_creds = Credentials(fp.read().decode())
 
             if new_creds.has_same_tokens(self):
-                logger.debug('Tokens unchanged after refresh (only expiresAt may have changed)')
-                if self.is_expired:
-                    logger.debug('Credentials are expired, re-login required')
+                if force:
+                    logger.debug('Tokens were not refreshed despite force flag, please re-login')
                     return None
+                if self.is_expired:
+                    logger.debug('Tokens have expired and could not be refreshed, please re-login')
+                    return None
+                logger.debug('Tokens are still valid, no refresh needed')
             else:
-                logger.debug('Credentials updated after refresh')
-                logger.debug(f'New expiration: {new_creds.expires_at}')
+                logger.debug(f'Tokens refreshed successfully (new expiration: {new_creds.expires_at})')
 
             return new_creds
