@@ -12,15 +12,19 @@ from serv import run_server, RequestEvent, request_events
 
 async def keep_claude_fresh(cred_path: Path) -> None:
     while True:
-        with open(cred_path, 'r') as f:
-            creds = Credentials(f.read())
-        if creds.is_expired:
-            new_creds = await creds.refresh()
-            if new_creds is None:
-                raise RuntimeError('Re-login required to refresh credentials.')
-            with open(cred_path, 'w') as f:
-                f.write(str(new_creds))
-            logger.info(f'Credentials refreshed and saved to {cred_path}')
+        try:
+            with open(cred_path, 'r') as f:
+                creds = Credentials(f.read())
+            if creds.is_expired:
+                new_creds = await creds.refresh()
+                if new_creds is None:
+                    logger.error(f'Re-login required to refresh credentials ({cred_path})')
+                else:
+                    with open(cred_path, 'w') as f:
+                        f.write(str(new_creds))
+                    logger.info(f'Credentials refreshed and saved to {cred_path}')
+        except Exception as e:
+            logger.error(f'Failed to refresh credentials ({cred_path}): {e}')
         await asyncio.sleep(random.uniform(300, 600))  # check every 5-10 minutes
 
 
@@ -59,7 +63,10 @@ async def main() -> None:
     await generate_new_credentials(Path('.credentials.json'), Path('public/.credentials.json'))
 
     async def on_credentials_access(event: RequestEvent):
-        await generate_new_credentials(Path('.credentials.json'), Path('public/.credentials.json'))
+        try:
+            await generate_new_credentials(Path('.credentials.json'), Path('public/.credentials.json'))
+        except Exception as e:
+            logger.error(f'Failed to generate new credentials on access: {e}')
 
     request_events.on('/.credentials.json', on_credentials_access)
 

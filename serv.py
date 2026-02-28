@@ -48,13 +48,27 @@ class RequestEventEmitter:
         """Unregister a callback."""
         self._listeners = [(p, cb) for p, cb in self._listeners if cb != callback]
 
+    @staticmethod
+    def _log_future_error(future: asyncio.Future) -> None:
+        if future.cancelled():
+            return
+        exc = future.exception()
+        if exc is not None:
+            logger.error(f'Async event callback failed: {exc}')
+
     def emit(self, event: RequestEvent) -> None:
         for pattern, callback in self._listeners:
             if pattern is None or fnmatch.fnmatch(event.path, pattern):
                 try:
                     if inspect.iscoroutinefunction(callback):
-                        if self._loop:
-                            asyncio.run_coroutine_threadsafe(callback(event), self._loop)
+                        if self._loop and self._loop.is_running():
+                            coro = callback(event)
+                            try:
+                                future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+                                future.add_done_callback(self._log_future_error)
+                            except RuntimeError:
+                                coro.close()
+                                logger.warning('Event loop is closed, skipping async callback')
                     else:
                         callback(event)
                 except Exception as e:
