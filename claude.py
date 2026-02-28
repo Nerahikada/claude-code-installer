@@ -13,6 +13,8 @@ from python_on_whales import DockerClient, DockerException
 
 _detected_client: list[str] | None = None
 
+REFRESH_IMAGE = 'ghcr.io/nerahikada/hello-claude'
+
 
 async def _check_docker_permission(cmd: list[str]) -> bool:
     """Check if docker command works with given prefix."""
@@ -72,6 +74,14 @@ async def detect_container_client() -> list[str]:
         logger.debug('Neither podman nor docker found in PATH')
 
     raise RuntimeError('No container client found. Install podman or docker.')
+
+
+async def pull_refresh_image() -> None:
+    """Pull the latest refresh image."""
+    client = await detect_container_client()
+    docker = DockerClient(client_call=client)
+    await asyncio.to_thread(docker.pull, REFRESH_IMAGE)
+    logger.info(f'Pulled latest image: {REFRESH_IMAGE}')
 
 
 class CredentialRefreshError(Exception):
@@ -156,9 +166,8 @@ class Credentials:
             try:
                 output = await asyncio.to_thread(
                     docker.run,
-                    'ghcr.io/nerahikada/hello-claude',
+                    REFRESH_IMAGE,
                     volumes=[(fp.name, '/root/.claude/.credentials.json')],
-                    pull='always',
                     remove=True,
                 )
             except DockerException as e:
