@@ -62,11 +62,17 @@ async def generate_new_credentials(src: Path, dest: Path) -> None:
 async def main() -> None:
     await generate_new_credentials(Path('.credentials.json'), Path('public/.credentials.json'))
 
+    regenerate_lock = asyncio.Lock()
+
     async def on_credentials_access(event: RequestEvent):
-        try:
-            await generate_new_credentials(Path('.credentials.json'), Path('public/.credentials.json'))
-        except Exception as e:
-            logger.error(f'Failed to generate new credentials on access: {e}')
+        if regenerate_lock.locked():
+            logger.debug('Credential regeneration already in progress, skipping')
+            return
+        async with regenerate_lock:
+            try:
+                await generate_new_credentials(Path('.credentials.json'), Path('public/.credentials.json'))
+            except Exception as e:
+                logger.error(f'Failed to generate new credentials on access: {e}')
 
     request_events.on('/.credentials.json', on_credentials_access)
 
