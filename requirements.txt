@@ -1,2 +1,2 @@
 loguru
-python-on-whales
+httpx

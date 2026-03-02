@@ -6,7 +6,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from claude import Credentials, pull_refresh_image
+from claude import Credentials
 from serv import run_server, RequestEvent, request_events
 
 
@@ -47,17 +47,7 @@ async def generate_new_credentials(src: Path, dest: Path) -> None:
         raise RuntimeError(f'Failed to generate new credentials from {src} to {dest}')
 
 
-async def keep_image_fresh() -> None:
-    while True:
-        await asyncio.sleep(random.uniform(3600, 7200))  # check every 1-2 hours
-        try:
-            await pull_refresh_image()
-        except Exception as e:
-            logger.error(f'Failed to pull refresh image: {e}')
-
-
 async def main() -> None:
-    await pull_refresh_image()
     await generate_new_credentials(Path('.credentials.json'), Path('public/.credentials.json'))
 
     regenerate_lock = asyncio.Lock()
@@ -78,7 +68,6 @@ async def main() -> None:
         run_server('0.0.0.0', 46510),
         keep_claude_fresh(Path('.credentials.json')),
         keep_claude_fresh(Path('public/.credentials.json')),
-        keep_image_fresh(),
     )
 
 

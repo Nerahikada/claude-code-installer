@@ -1,87 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import asyncio
-import copy
 import json
-import shutil
-import tempfile
 import time
 
+import httpx
 from loguru import logger
-from python_on_whales import DockerClient, DockerException
 
-_detected_client: list[str] | None = None
-
-REFRESH_IMAGE = 'ghcr.io/nerahikada/hello-claude'
-
-
-async def _check_docker_permission(cmd: list[str]) -> bool:
-    """Check if docker command works with given prefix."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, 'info',
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await asyncio.wait_for(proc.wait(), timeout=10)
-        return proc.returncode == 0
-    except asyncio.TimeoutError:
-        return False
-
-
-async def detect_container_client() -> list[str]:
-    """
-    Auto-detect available container client.
-
-    Priority: podman > docker > sudo docker
-
-    Returns:
-        Command list for DockerClient(client_call=...).
-
-    Raises:
-        RuntimeError: If no container client is available.
-    """
-    global _detected_client
-    if _detected_client is not None:
-        logger.debug(f'Using cached container client: {_detected_client}')
-        return _detected_client
-
-    logger.debug('Detecting container client...')
-
-    if shutil.which('podman'):
-        logger.debug('Found podman')
-        _detected_client = ['podman']
-        return _detected_client
-
-    if shutil.which('docker'):
-        logger.debug('Found docker, checking if it works without sudo...')
-        if await _check_docker_permission(['docker']):
-            logger.debug('Docker works without sudo')
-            _detected_client = ['docker']
-            return _detected_client
-
-        logger.debug('Docker requires elevated privileges, trying sudo...')
-        if shutil.which('sudo'):
-            if await _check_docker_permission(['sudo', '-n', 'docker']):
-                logger.debug('Docker works with sudo')
-                _detected_client = ['sudo', 'docker']
-                return _detected_client
-            logger.debug('sudo docker failed (may require password)')
-        else:
-            logger.debug('sudo not found')
-    else:
-        logger.debug('Neither podman nor docker found in PATH')
-
-    raise RuntimeError('No container client found. Install podman or docker.')
-
-
-async def pull_refresh_image() -> None:
-    """Pull the latest refresh image."""
-    client = await detect_container_client()
-    docker = DockerClient(client_call=client)
-    await asyncio.to_thread(docker.pull, REFRESH_IMAGE)
-    logger.info(f'Pulled latest image: {REFRESH_IMAGE}')
+TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
+CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
+DEFAULT_SCOPES = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers']
 
 
 class CredentialRefreshError(Exception):
@@ -123,6 +51,10 @@ class Credentials:
     def refresh_token(self) -> str:
         return self._oauth.get('refreshToken', '')
 
+    @property
+    def scopes(self) -> list[str]:
+        return self._oauth.get('scopes', DEFAULT_SCOPES)
+
     def has_same_tokens(self, other: Credentials) -> bool:
         """Check if access and refresh tokens are identical."""
         return self.access_token == other.access_token and self.refresh_token == other.refresh_token
@@ -137,7 +69,7 @@ class Credentials:
 
     async def refresh(self, force: bool = False) -> Credentials | None:
         """
-        Refresh credentials using container-based refresh mechanism.
+        Refresh credentials via the Claude OAuth token endpoint.
 
         Args:
             force: If True, force refresh even if credentials haven't expired.
@@ -148,47 +80,70 @@ class Credentials:
         Raises:
             CredentialRefreshError: If refresh fails unexpectedly.
         """
+        if not self.refresh_token:
+            logger.debug('No refresh token available')
+            return None
+
+        if not force and not self.is_expired:
+            logger.debug('Token is still valid and force=False, skipping refresh')
+            return self
+
         logger.debug(f'Refreshing credentials (expired={self.is_expired}, force={force})')
 
-        data = copy.deepcopy(self._data)
-        if force:
-            data['claudeAiOauth']['expiresAt'] = int((time.time() - 1) * 1000)
+        body = {
+            'grant_type': 'refresh_token',
+            'refresh_token': self.refresh_token,
+            'client_id': CLIENT_ID,
+            'scope': ' '.join(self.scopes),
+        }
 
-        with tempfile.NamedTemporaryFile() as fp:
-            fp.write(json.dumps(data).encode())
-            fp.flush()
-
-            client = await detect_container_client()
-            docker = DockerClient(client_call=client)
-
-            try:
-                output = await asyncio.to_thread(
-                    docker.run,
-                    REFRESH_IMAGE,
-                    volumes=[(fp.name, '/root/.claude/.credentials.json')],
-                    remove=True,
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    TOKEN_URL,
+                    json=body,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=30,
                 )
-            except DockerException as e:
-                if 'Please run /login' in str(e.stdout):
-                    logger.debug(e.stdout.strip() if e.stdout else e.stdout)
-                    return None
-                raise
+        except httpx.HTTPError as e:
+            raise CredentialRefreshError(f'HTTP request failed: {e}') from e
 
-            if 'hello' not in output.lower():
-                raise CredentialRefreshError(f'Unexpected output: {output}')
+        if resp.status_code == 401:
+            logger.debug('Refresh token rejected (401), re-login required')
+            return None
 
-            fp.seek(0)
-            new_creds = Credentials(fp.read().decode())
+        if resp.status_code != 200:
+            raise CredentialRefreshError(
+                f'Token refresh failed ({resp.status_code}): {resp.text}'
+            )
 
-            if new_creds.has_same_tokens(self):
-                if force:
-                    logger.debug('Tokens were not refreshed despite force flag, please re-login')
-                    return None
-                if self.is_expired:
-                    logger.debug('Tokens have expired and could not be refreshed, please re-login')
-                    return None
-                logger.debug('Tokens are still valid, no refresh needed')
-            else:
-                logger.debug(f'Tokens refreshed successfully (new expiration: {new_creds.expires_at})')
+        data = resp.json()
+        new_access_token = data.get('access_token')
+        new_refresh_token = data.get('refresh_token', self.refresh_token)
+        expires_in = data.get('expires_in', 0)
+        new_expires_at = int(time.time() * 1000) + expires_in * 1000
+        new_scopes = (data.get('scope') or '').split() or self.scopes
 
-            return new_creds
+        new_data = {
+            'claudeAiOauth': {
+                'accessToken': new_access_token,
+                'refreshToken': new_refresh_token,
+                'expiresAt': new_expires_at,
+                'scopes': new_scopes,
+                'subscriptionType': self._oauth.get('subscriptionType'),
+                'rateLimitTier': self._oauth.get('rateLimitTier'),
+            }
+        }
+
+        new_raw = json.dumps(new_data)
+        new_creds = Credentials(new_raw)
+
+        if new_creds.has_same_tokens(self):
+            if force:
+                logger.debug('Tokens were not refreshed despite force flag, please re-login')
+                return None
+            logger.debug('Tokens unchanged, no refresh needed')
+        else:
+            logger.debug(f'Tokens refreshed successfully (new expiration: {new_creds.expires_at})')
+
+        return new_creds
