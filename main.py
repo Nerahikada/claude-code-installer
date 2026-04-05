@@ -14,7 +14,7 @@ async def main() -> None:
     ]
 
     for provider in providers:
-        provider.load()
+        await provider.force_refresh()
         register_provider(provider)
         logger.info(f'[{provider.name}] Provider registered')
 
