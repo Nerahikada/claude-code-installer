@@ -1,36 +1,33 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 import httpx
 from loguru import logger
+
+from credentials.base import CredentialRefreshError, Credentials, CredentialProvider
 
 TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
 CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 DEFAULT_SCOPES = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers']
 
 
-class CredentialRefreshError(Exception):
-    """Raised when credential refresh fails unexpectedly."""
+class ClaudeCredentials(Credentials):
+    """Claude AI OAuth credentials."""
 
-
-class Credentials:
-    """Manages Claude AI OAuth credentials with refresh capability."""
-
-    def __init__(self, credentials: str) -> None:
-        self._raw = credentials
-        self._data = self._parse(credentials)
+    def __init__(self, raw: str) -> None:
+        self._raw = raw
+        self._data = self._parse(raw)
         self._oauth = self._data['claudeAiOauth']
 
     @staticmethod
-    def _parse(credentials: str) -> dict:
+    def _parse(raw: str) -> dict:
         try:
-            data = json.loads(credentials)
+            data = json.loads(raw)
         except json.JSONDecodeError as e:
             raise ValueError('Invalid JSON format') from e
-
         if 'claudeAiOauth' not in data:
             raise ValueError('Missing required key: claudeAiOauth')
         return data
@@ -55,31 +52,10 @@ class Credentials:
     def scopes(self) -> list[str]:
         return self._oauth.get('scopes', DEFAULT_SCOPES)
 
-    def has_same_tokens(self, other: Credentials) -> bool:
-        """Check if access and refresh tokens are identical."""
-        return self.access_token == other.access_token and self.refresh_token == other.refresh_token
-
-    def __str__(self) -> str:
+    def serialize(self) -> str:
         return self._raw
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Credentials):
-            return NotImplemented
-        return self._data == other._data
-
-    async def refresh(self, force: bool = False) -> Credentials | None:
-        """
-        Refresh credentials via the Claude OAuth token endpoint.
-
-        Args:
-            force: If True, force refresh even if credentials haven't expired.
-
-        Returns:
-            New Credentials instance if refresh succeeded, None if re-login is required.
-
-        Raises:
-            CredentialRefreshError: If refresh fails unexpectedly.
-        """
+    async def refresh(self, force: bool = False) -> ClaudeCredentials | None:
         if not self.refresh_token:
             logger.debug('No refresh token available')
             return None
@@ -136,9 +112,9 @@ class Credentials:
         }
 
         new_raw = json.dumps(new_data)
-        new_creds = Credentials(new_raw)
+        new_creds = ClaudeCredentials(new_raw)
 
-        if new_creds.has_same_tokens(self):
+        if self.access_token == new_creds.access_token and self.refresh_token == new_creds.refresh_token:
             if force:
                 logger.debug('Tokens were not refreshed despite force flag, please re-login')
                 return None
@@ -147,3 +123,13 @@ class Credentials:
             logger.debug(f'Tokens refreshed successfully (new expiration: {new_creds.expires_at})')
 
         return new_creds
+
+
+class ClaudeProvider(CredentialProvider):
+    """Credential provider for Claude AI."""
+
+    def __init__(self, cred_path: Path | None = None) -> None:
+        super().__init__('claude', cred_path)
+
+    def _load(self, raw: str) -> ClaudeCredentials:
+        return ClaudeCredentials(raw)

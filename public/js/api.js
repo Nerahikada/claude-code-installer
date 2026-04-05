@@ -23,16 +23,16 @@ export async function fetchCommand(mode, os) {
     }
 }
 
-export async function fetchCredentials() {
+export async function fetchCredentials(provider = 'claude') {
     try {
-        const response = await fetch('.credentials.json');
+        const response = await fetch(`/api/credentials/${provider}`);
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
         }
         const text = await response.text();
         return text.trim();
     } catch (err) {
-        console.error('Failed to fetch credentials:', err);
+        console.error(`Failed to fetch credentials (${provider}):`, err);
         return null;
     }
 }
