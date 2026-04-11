@@ -11,7 +11,7 @@ from credentials.base import CredentialRefreshError, Credentials, CredentialProv
 
 TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
 CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
-DEFAULT_SCOPES = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers']
+DEFAULT_SCOPES = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers', 'user:file_upload']
 
 
 class ClaudeCredentials(Credentials):
