@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import asyncio
-import json
-import mimetypes
 import time
 from collections import defaultdict
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
+import uvicorn
 from loguru import logger
+from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse, PlainTextResponse, Response
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 if TYPE_CHECKING:
     from credentials.base import CredentialProvider
 
 PUBLIC_DIR = Path('public')
 
+_providers: dict[str, CredentialProvider] = {}
+
+
+def register_provider(provider: CredentialProvider) -> None:
+    _providers[provider.name] = provider
+
 
 class RateLimiter:
-    """IP-based rate limiter using a sliding window."""
+    """IP-based sliding-window rate limiter."""
 
     def __init__(self, max_requests: int = 10, window_seconds: float = 60) -> None:
         self._max_requests = max_requests
@@ -30,139 +38,73 @@ class RateLimiter:
 
     def is_allowed(self, ip: str) -> bool:
         now = time.monotonic()
-        timestamps = self._requests[ip]
-        # Remove expired entries
-        self._requests[ip] = [t for t in timestamps if now - t < self._window]
-        if len(self._requests[ip]) >= self._max_requests:
+        timestamps = [t for t in self._requests[ip] if now - t < self._window]
+        if len(timestamps) >= self._max_requests:
+            self._requests[ip] = timestamps
             return False
-        self._requests[ip].append(now)
+        timestamps.append(now)
+        self._requests[ip] = timestamps
         return True
 
 
-# Global state set by run_server
-_providers: dict[str, CredentialProvider] = {}
 _rate_limiter = RateLimiter()
-_loop: asyncio.AbstractEventLoop | None = None
 
 
-def register_provider(provider: CredentialProvider) -> None:
-    _providers[provider.name] = provider
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get('x-forwarded-for')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    real_ip = request.headers.get('x-real-ip')
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else 'unknown'
 
 
-class RequestHandler(BaseHTTPRequestHandler):
-    """HTTP handler for static files and API endpoints."""
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Apply rate limiting to /api/* routes."""
 
-    def log_message(self, format: str, *args) -> None:
-        pass
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith('/api/'):
+            ip = _client_ip(request)
+            if not _rate_limiter.is_allowed(ip):
+                logger.warning(f'Rate limit exceeded for {ip} on {request.url.path}')
+                return JSONResponse({'error': 'Rate limit exceeded'}, status_code=429)
+        return await call_next(request)
 
-    def _get_client_ip(self) -> str:
-        forwarded = self.headers.get('X-Forwarded-For')
-        if forwarded:
-            return forwarded.split(',')[0].strip()
-        real_ip = self.headers.get('X-Real-IP')
-        if real_ip:
-            return real_ip.strip()
-        return self.client_address[0]
 
-    def _send_json(self, status: HTTPStatus, data: dict | str) -> None:
-        body = data if isinstance(data, str) else json.dumps(data)
-        encoded = body.encode()
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
+async def get_credentials(request: Request) -> Response:
+    provider_name = request.path_params['provider']
+    provider = _providers.get(provider_name)
+    if provider is None:
+        return JSONResponse({'error': f'Unknown provider: {provider_name}'}, status_code=404)
 
-    def _send_error(self, status: HTTPStatus, message: str | None = None) -> None:
-        if message:
-            self._send_json(status, {'error': message})
-        else:
-            self.send_response(status)
-            self.end_headers()
+    if provider.credentials is None:
+        return JSONResponse({'error': 'Credentials not yet available'}, status_code=503)
 
-    def _handle_api(self, path: str) -> None:
-        """Route API requests."""
-        client_ip = self._get_client_ip()
+    try:
+        client_creds = await provider.generate_for_client()
+    except Exception as e:
+        logger.error(f'[{provider_name}] Failed to generate client credentials: {e}')
+        return JSONResponse({'error': 'Credential generation failed'}, status_code=500)
 
-        # /api/credentials/<provider>
-        parts = path.strip('/').split('/')
-        if len(parts) == 3 and parts[0] == 'api' and parts[1] == 'credentials':
-            provider_name = parts[2]
-            self._handle_credentials(provider_name, client_ip)
-            return
+    logger.debug(f'{_client_ip(request)} GET /api/credentials/{provider_name}')
+    return PlainTextResponse(client_creds.serialize(), media_type='application/json')
 
-        self._send_error(HTTPStatus.NOT_FOUND, 'Unknown API endpoint')
 
-    def _handle_credentials(self, provider_name: str, client_ip: str) -> None:
-        if not _rate_limiter.is_allowed(client_ip):
-            logger.warning(f'Rate limit exceeded for {client_ip} on /api/credentials/{provider_name}')
-            self._send_error(HTTPStatus.TOO_MANY_REQUESTS, 'Rate limit exceeded')
-            return
+routes = [
+    Route('/api/credentials/{provider}', get_credentials),
+    Mount('/', app=StaticFiles(directory=str(PUBLIC_DIR), html=True)),
+]
 
-        provider = _providers.get(provider_name)
-        if provider is None:
-            self._send_error(HTTPStatus.NOT_FOUND, f'Unknown provider: {provider_name}')
-            return
-
-        if provider.credentials is None:
-            self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, 'Credentials not yet available')
-            return
-
-        # Generate independent client credentials (dual-refresh)
-        if _loop and _loop.is_running():
-            try:
-                future = asyncio.run_coroutine_threadsafe(provider.generate_for_client(), _loop)
-                client_creds = future.result(timeout=60)
-                logger.debug(f'{client_ip} GET /api/credentials/{provider_name}')
-                self._send_json(HTTPStatus.OK, client_creds.serialize())
-                return
-            except Exception as e:
-                logger.error(f'[{provider_name}] Failed to generate client credentials: {e}')
-                self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, 'Credential generation failed')
-                return
-
-        self._send_error(HTTPStatus.SERVICE_UNAVAILABLE, 'Server not ready')
-
-    def _handle_static(self) -> None:
-        """Serve static files from PUBLIC_DIR."""
-        parsed = urlparse(self.path)
-        request_path = parsed.path.lstrip('/')
-        if not request_path:
-            request_path = 'index.html'
-
-        file_path = (PUBLIC_DIR / request_path).resolve()
-
-        if not file_path.is_relative_to(PUBLIC_DIR.resolve()) or not file_path.is_file():
-            self._send_error(HTTPStatus.NOT_FOUND)
-            return
-
-        content_type, _ = mimetypes.guess_type(file_path)
-        if content_type is None:
-            content_type = 'application/octet-stream'
-
-        self.send_response(HTTPStatus.OK)
-        self.send_header('Content-Type', content_type)
-        self.send_header('Content-Length', str(file_path.stat().st_size))
-        self.end_headers()
-
-        with open(file_path, 'rb') as f:
-            self.wfile.write(f.read())
-
-        client_ip = self._get_client_ip()
-        logger.debug(f'{client_ip} "{self.command} {self.path}" {HTTPStatus.OK.value} {file_path.stat().st_size}')
-
-    def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        if parsed.path.startswith('/api/'):
-            self._handle_api(parsed.path)
-        else:
-            self._handle_static()
+app = Starlette(
+    routes=routes,
+    middleware=[Middleware(RateLimitMiddleware)],
+)
 
 
 async def run_server(host: str, port: int) -> None:
     """Run the HTTP server asynchronously."""
-    global _loop
-    _loop = asyncio.get_running_loop()
-    server = HTTPServer((host, port), RequestHandler)
+    config = uvicorn.Config(app, host=host, port=port, log_level='warning', access_log=False)
+    server = uvicorn.Server(config)
     logger.info(f'Server running at http://{host}:{port}')
-    await asyncio.to_thread(server.serve_forever)
+    await server.serve()

@@ -1,2 +1,4 @@
 loguru
 httpx
+starlette
+uvicorn
