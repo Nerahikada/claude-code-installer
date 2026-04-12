@@ -4,7 +4,7 @@ import asyncio
 
 from loguru import logger
 
-from credentials.claude import ClaudeProvider
+from tokens.claude import ClaudeProvider
 from serv import register_provider, run_server
 
 

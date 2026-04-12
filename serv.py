@@ -17,16 +17,16 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 if TYPE_CHECKING:
-    from credentials.base import CredentialProvider
+    from tokens.base import TokenProvider
 
-from credentials.base import CredentialSplitError
+from tokens.base import TokenSplitError
 
 PUBLIC_DIR = Path('public')
 
-_providers: dict[str, CredentialProvider] = {}
+_providers: dict[str, TokenProvider] = {}
 
 
-def register_provider(provider: CredentialProvider) -> None:
+def register_provider(provider: TokenProvider) -> None:
     _providers[provider.name] = provider
 
 
@@ -74,35 +74,35 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-async def get_credentials(request: Request) -> Response:
+async def get_token(request: Request) -> Response:
     provider_name = request.path_params['provider']
     provider = _providers.get(provider_name)
     if provider is None:
         return JSONResponse({'error': f'Unknown provider: {provider_name}'}, status_code=404)
 
-    if provider.credentials is None:
-        return JSONResponse({'error': 'Credentials not yet available'}, status_code=503)
+    if provider.token is None:
+        return JSONResponse({'error': 'Token not yet available'}, status_code=503)
 
-    logger.debug(f'{_client_ip(request)} GET /api/credentials/{provider_name}')
+    logger.debug(f'{_client_ip(request)} GET /api/tokens/{provider_name}')
 
     try:
-        client_creds = await provider.generate_for_client()
-    except CredentialSplitError as e:
+        client_token = await provider.generate_for_client()
+    except TokenSplitError as e:
         logger.warning(f'[{provider_name}] {e}')
         return JSONResponse(
-            {'error': 'Credential generation temporarily unavailable'},
+            {'error': 'Token generation temporarily unavailable'},
             status_code=503,
             headers={'Retry-After': '1'},
         )
     except Exception as e:
-        logger.error(f'[{provider_name}] Failed to generate client credentials: {e}')
-        return JSONResponse({'error': 'Credential generation failed'}, status_code=500)
+        logger.error(f'[{provider_name}] Failed to generate client token: {e}')
+        return JSONResponse({'error': 'Token generation failed'}, status_code=500)
 
-    return PlainTextResponse(client_creds.serialize(), media_type='application/json')
+    return PlainTextResponse(client_token.serialize(), media_type='application/json')
 
 
 routes = [
-    Route('/api/credentials/{provider}', get_credentials),
+    Route('/api/tokens/{provider}', get_token),
     Mount('/', app=StaticFiles(directory=str(PUBLIC_DIR), html=True)),
 ]
 

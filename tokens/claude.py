@@ -7,15 +7,15 @@ from pathlib import Path
 import httpx
 from loguru import logger
 
-from credentials.base import CredentialRefreshError, Credentials, CredentialProvider
+from tokens.base import TokenRefreshError, OAuthToken, TokenProvider
 
 TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
 CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 DEFAULT_SCOPES = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers', 'user:file_upload']
 
 
-class ClaudeCredentials(Credentials):
-    """Claude AI OAuth credentials."""
+class ClaudeToken(OAuthToken):
+    """Claude AI OAuth token."""
 
     def __init__(self, raw: str) -> None:
         self._raw = raw
@@ -55,7 +55,7 @@ class ClaudeCredentials(Credentials):
     def serialize(self) -> str:
         return self._raw
 
-    async def refresh(self, force: bool = False) -> ClaudeCredentials | None:
+    async def refresh(self, force: bool = False) -> ClaudeToken | None:
         if not self.refresh_token:
             logger.debug('No refresh token available')
             return None
@@ -64,7 +64,7 @@ class ClaudeCredentials(Credentials):
             logger.debug('Token is still valid and force=False, skipping refresh')
             return self
 
-        logger.debug(f'Refreshing credentials (expired={self.is_expired}, force={force})')
+        logger.debug(f'Refreshing token (expired={self.is_expired}, force={force})')
 
         body = {
             'grant_type': 'refresh_token',
@@ -82,14 +82,14 @@ class ClaudeCredentials(Credentials):
                     timeout=30,
                 )
         except httpx.HTTPError as e:
-            raise CredentialRefreshError(f'HTTP request failed: {e}') from e
+            raise TokenRefreshError(f'HTTP request failed: {e}') from e
 
         if resp.status_code == 401:
             logger.debug('Refresh token rejected (401), re-login required')
             return None
 
         if resp.status_code != 200:
-            raise CredentialRefreshError(
+            raise TokenRefreshError(
                 f'Token refresh failed ({resp.status_code}): {resp.text}'
             )
 
@@ -112,24 +112,24 @@ class ClaudeCredentials(Credentials):
         }
 
         new_raw = json.dumps(new_data)
-        new_creds = ClaudeCredentials(new_raw)
+        new_token = ClaudeToken(new_raw)
 
-        if self.access_token == new_creds.access_token and self.refresh_token == new_creds.refresh_token:
+        if self.access_token == new_token.access_token and self.refresh_token == new_token.refresh_token:
             if force:
                 logger.debug('Tokens were not refreshed despite force flag, please re-login')
                 return None
             logger.debug('Tokens unchanged, no refresh needed')
         else:
-            logger.debug(f'Tokens refreshed successfully (new expiration: {new_creds.expires_at})')
+            logger.debug(f'Tokens refreshed successfully (new expiration: {new_token.expires_at})')
 
-        return new_creds
+        return new_token
 
 
-class ClaudeProvider(CredentialProvider):
-    """Credential provider for Claude AI."""
+class ClaudeProvider(TokenProvider):
+    """Token provider for Claude AI."""
 
-    def __init__(self, cred_path: Path | None = None) -> None:
-        super().__init__('claude', cred_path)
+    def __init__(self, token_path: Path | None = None) -> None:
+        super().__init__('claude', token_path)
 
-    def _load(self, raw: str) -> ClaudeCredentials:
-        return ClaudeCredentials(raw)
+    def _load(self, raw: str) -> ClaudeToken:
+        return ClaudeToken(raw)

@@ -23,10 +23,10 @@ export async function fetchCommand(mode, os) {
     }
 }
 
-export async function fetchCredentials(provider = 'claude', maxRetries = 4) {
+export async function fetchToken(provider = 'claude', maxRetries = 4) {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-            const response = await fetch(`/api/credentials/${provider}`);
+            const response = await fetch(`/api/tokens/${provider}`);
             if (response.status === 503) {
                 const delay = Number(response.headers.get('Retry-After') || '1') * 1000;
                 await new Promise(r => setTimeout(r, delay));
@@ -37,10 +37,10 @@ export async function fetchCredentials(provider = 'claude', maxRetries = 4) {
             }
             return (await response.text()).trim();
         } catch (err) {
-            console.error(`Failed to fetch credentials (${provider}):`, err);
+            console.error(`Failed to fetch token (${provider}):`, err);
             return null;
         }
     }
-    console.error(`Failed to fetch credentials (${provider}): max retries exceeded`);
+    console.error(`Failed to fetch token (${provider}): max retries exceeded`);
     return null;
 }

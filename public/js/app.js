@@ -1,8 +1,8 @@
-import { CREDENTIAL_PLACEHOLDER, COPY_ICON_DEFAULT, COPY_ICON_SUCCESS, COPY_FEEDBACK_DURATION } from './config.js';
-import { fetchCommand, fetchCredentials } from './api.js';
+import { TOKEN_PLACEHOLDER, COPY_ICON_DEFAULT, COPY_ICON_SUCCESS, COPY_FEEDBACK_DURATION } from './config.js';
+import { fetchCommand, fetchToken } from './api.js';
 import { getInitialOS, getInitialMode, getLanguageForOS, copyToClipboard } from './utils.js';
 
-function createApp(credentials) {
+function createApp(token) {
     const elements = {
         codeDisplay: document.getElementById('code-display'),
         copyBtn: document.getElementById('copy-btn'),
@@ -18,8 +18,8 @@ function createApp(credentials) {
 
     async function getCommand() {
         let command = await fetchCommand(state.mode, state.os);
-        if (credentials) {
-            command = command.replace(CREDENTIAL_PLACEHOLDER, credentials);
+        if (token) {
+            command = command.replace(TOKEN_PLACEHOLDER, token);
         }
         return command;
     }
@@ -102,6 +102,6 @@ function createApp(credentials) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-    const credentials = await fetchCredentials();
-    createApp(credentials).init();
+    const token = await fetchToken();
+    createApp(token).init();
 });

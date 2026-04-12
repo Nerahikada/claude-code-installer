@@ -1,1 +1,1 @@
-echo '{{CREDENTIALS}}' > ~/.claude/.credentials.json
+echo '{{TOKEN}}' > ~/.claude/.credentials.json
