@@ -81,13 +81,14 @@ async def get_credentials(request: Request) -> Response:
     if provider.credentials is None:
         return JSONResponse({'error': 'Credentials not yet available'}, status_code=503)
 
+    logger.debug(f'{_client_ip(request)} GET /api/credentials/{provider_name}')
+
     try:
         client_creds = await provider.generate_for_client()
     except Exception as e:
         logger.error(f'[{provider_name}] Failed to generate client credentials: {e}')
         return JSONResponse({'error': 'Credential generation failed'}, status_code=500)
 
-    logger.debug(f'{_client_ip(request)} GET /api/credentials/{provider_name}')
     return PlainTextResponse(client_creds.serialize(), media_type='application/json')
 
 
