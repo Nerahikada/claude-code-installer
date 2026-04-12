@@ -12,6 +12,10 @@ class CredentialRefreshError(Exception):
     """Raised when credential refresh fails unexpectedly."""
 
 
+class CredentialSplitError(Exception):
+    """Raised when dual refresh produced only one token (server token is healthy)."""
+
+
 class Credentials(ABC):
     """Abstract base for OAuth credentials."""
 
@@ -89,9 +93,15 @@ class CredentialProvider(ABC):
     async def generate_for_client(self) -> Credentials:
         """Generate an independent credential set for client distribution.
 
-        Refreshes twice in parallel from the current token: one for the server
-        (saved to disk) and one for the client (returned). This ensures both
-        sides hold independent refresh tokens that won't invalidate each other.
+        Exploits the OAuth server's grace period before refresh-token
+        invalidation: two parallel refreshes from the same token can each
+        yield an independent token pair.
+
+        - 2 succeed → save one (server), return the other (client).
+        - 1 succeeds → server token preserved, raise CredentialSplitError
+          (client should retry).
+        - 0 succeed → should not happen under normal operation (seed is
+          validated at startup); indicates an external problem.
         """
         async with self._lock:
             creds = self.load()
@@ -106,35 +116,13 @@ class CredentialProvider(ABC):
                 self._save(valid[0])
                 logger.info(f'[{self.name}] Generated independent client credentials')
                 return valid[1]
-            elif len(valid) == 1:
+
+            if len(valid) == 1:
                 self._save(valid[0])
-                logger.warning(f'[{self.name}] Only one refresh succeeded, retrying dual refresh...')
-                creds = self.load()
-                retry_results = await asyncio.gather(
-                    creds.refresh(force=True),
-                    creds.refresh(force=True),
-                    return_exceptions=True,
-                )
-                retry_valid = [r for r in retry_results if isinstance(r, Credentials)]
-                if len(retry_valid) == 2:
-                    self._save(retry_valid[0])
-                    logger.info(f'[{self.name}] Generated independent client credentials (retry)')
-                    return retry_valid[1]
-                elif len(retry_valid) == 1:
-                    self._save(retry_valid[0])
-                    raise CredentialRefreshError(
-                        f'[{self.name}] Could not generate independent client credentials'
-                    )
-                else:
-                    retry_errors = [r for r in retry_results if isinstance(r, Exception)]
-                    raise CredentialRefreshError(
-                        f'[{self.name}] Retry dual refresh failed: {retry_errors}'
-                    )
-            else:
-                errors = [r for r in results if isinstance(r, Exception)]
-                raise CredentialRefreshError(
-                    f'[{self.name}] Both refreshes failed: {errors}'
-                )
+                raise CredentialSplitError(f'[{self.name}] Token split failed, server token preserved')
+
+            errors = [r for r in results if isinstance(r, Exception)]
+            raise CredentialRefreshError(f'[{self.name}] Both refreshes failed: {errors}')
 
     def _save(self, creds: Credentials) -> None:
         self._cred_path.write_text(creds.serialize())

@@ -19,6 +19,8 @@ from starlette.staticfiles import StaticFiles
 if TYPE_CHECKING:
     from credentials.base import CredentialProvider
 
+from credentials.base import CredentialSplitError
+
 PUBLIC_DIR = Path('public')
 
 _providers: dict[str, CredentialProvider] = {}
@@ -85,6 +87,13 @@ async def get_credentials(request: Request) -> Response:
 
     try:
         client_creds = await provider.generate_for_client()
+    except CredentialSplitError as e:
+        logger.warning(f'[{provider_name}] {e}')
+        return JSONResponse(
+            {'error': 'Credential generation temporarily unavailable'},
+            status_code=503,
+            headers={'Retry-After': '1'},
+        )
     except Exception as e:
         logger.error(f'[{provider_name}] Failed to generate client credentials: {e}')
         return JSONResponse({'error': 'Credential generation failed'}, status_code=500)
