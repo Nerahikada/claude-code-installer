@@ -108,13 +108,28 @@ class CredentialProvider(ABC):
                 return valid[1]
             elif len(valid) == 1:
                 self._save(valid[0])
-                logger.warning(f'[{self.name}] Only one refresh succeeded, retrying...')
-                # Retry without lock (we already hold it)
+                logger.warning(f'[{self.name}] Only one refresh succeeded, retrying dual refresh...')
                 creds = self.load()
-                client_creds = await creds.refresh(force=True)
-                if client_creds is None:
-                    raise CredentialRefreshError(f'[{self.name}] Client credential generation failed')
-                return client_creds
+                retry_results = await asyncio.gather(
+                    creds.refresh(force=True),
+                    creds.refresh(force=True),
+                    return_exceptions=True,
+                )
+                retry_valid = [r for r in retry_results if isinstance(r, Credentials)]
+                if len(retry_valid) == 2:
+                    self._save(retry_valid[0])
+                    logger.info(f'[{self.name}] Generated independent client credentials (retry)')
+                    return retry_valid[1]
+                elif len(retry_valid) == 1:
+                    self._save(retry_valid[0])
+                    raise CredentialRefreshError(
+                        f'[{self.name}] Could not generate independent client credentials'
+                    )
+                else:
+                    retry_errors = [r for r in retry_results if isinstance(r, Exception)]
+                    raise CredentialRefreshError(
+                        f'[{self.name}] Retry dual refresh failed: {retry_errors}'
+                    )
             else:
                 errors = [r for r in results if isinstance(r, Exception)]
                 raise CredentialRefreshError(
