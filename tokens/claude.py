@@ -7,12 +7,11 @@ from pathlib import Path
 import httpx
 from loguru import logger
 
-from tokens.base import TokenRefreshError, OAuthToken, TokenProvider
+from tokens.base import TokenRefreshError, OAuthToken, TokenProvider, TokenRefresher
 
 TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
 CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 DEFAULT_SCOPES = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers', 'user:file_upload']
-
 
 class ClaudeToken(OAuthToken):
     """Claude AI OAuth token."""
@@ -55,32 +54,53 @@ class ClaudeToken(OAuthToken):
     def serialize(self) -> str:
         return self._raw
 
-    async def refresh(self, force: bool = False) -> ClaudeToken | None:
-        if not self.refresh_token:
+    def serialize_for_client(self) -> str:
+        """Serialize without refresh_token. Clients only need the access_token."""
+        client_view = {
+            'claudeAiOauth': {
+                'accessToken': self.access_token,
+                'expiresAt': int(self.expires_at * 1000),
+                'scopes': self.scopes,
+                'subscriptionType': self._oauth.get('subscriptionType'),
+                'rateLimitTier': self._oauth.get('rateLimitTier'),
+            }
+        }
+        return json.dumps(client_view)
+
+
+class ClaudeRefresher(TokenRefresher):
+    """Handles OAuth token refresh against the Claude API."""
+
+    def __init__(self) -> None:
+        self._client = httpx.AsyncClient(timeout=30)
+
+    async def refresh(self, token: OAuthToken, *, force: bool = False) -> ClaudeToken | None:
+        if not isinstance(token, ClaudeToken):
+            raise TypeError(f'Expected ClaudeToken, got {type(token).__name__}')
+
+        if not token.refresh_token:
             logger.debug('No refresh token available')
             return None
 
-        if not force and not self.is_expired:
+        if not force and not token.is_expired:
             logger.debug('Token is still valid and force=False, skipping refresh')
-            return self
+            return token
 
-        logger.debug(f'Refreshing token (expired={self.is_expired}, force={force})')
+        logger.debug(f'Refreshing token (expired={token.is_expired}, force={force})')
 
         body = {
             'grant_type': 'refresh_token',
-            'refresh_token': self.refresh_token,
+            'refresh_token': token.refresh_token,
             'client_id': CLIENT_ID,
-            'scope': ' '.join(self.scopes),
+            'scope': ' '.join(token.scopes),
         }
 
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    TOKEN_URL,
-                    json=body,
-                    headers={'Content-Type': 'application/json'},
-                    timeout=30,
-                )
+            resp = await self._client.post(
+                TOKEN_URL,
+                json=body,
+                headers={'Content-Type': 'application/json'},
+            )
         except httpx.HTTPError as e:
             raise TokenRefreshError(f'HTTP request failed: {e}') from e
 
@@ -95,10 +115,10 @@ class ClaudeToken(OAuthToken):
 
         data = resp.json()
         new_access_token = data.get('access_token')
-        new_refresh_token = data.get('refresh_token', self.refresh_token)
+        new_refresh_token = data.get('refresh_token', token.refresh_token)
         expires_in = data.get('expires_in', 0)
         new_expires_at = int(time.time() * 1000) + expires_in * 1000
-        new_scopes = (data.get('scope') or '').split() or self.scopes
+        new_scopes = (data.get('scope') or '').split() or token.scopes
 
         new_data = {
             'claudeAiOauth': {
@@ -106,15 +126,15 @@ class ClaudeToken(OAuthToken):
                 'refreshToken': new_refresh_token,
                 'expiresAt': new_expires_at,
                 'scopes': new_scopes,
-                'subscriptionType': self._oauth.get('subscriptionType'),
-                'rateLimitTier': self._oauth.get('rateLimitTier'),
+                'subscriptionType': token._oauth.get('subscriptionType'),
+                'rateLimitTier': token._oauth.get('rateLimitTier'),
             }
         }
 
         new_raw = json.dumps(new_data)
         new_token = ClaudeToken(new_raw)
 
-        if self.access_token == new_token.access_token and self.refresh_token == new_token.refresh_token:
+        if token.access_token == new_token.access_token and token.refresh_token == new_token.refresh_token:
             if force:
                 logger.debug('Tokens were not refreshed despite force flag, please re-login')
                 return None
@@ -124,12 +144,15 @@ class ClaudeToken(OAuthToken):
 
         return new_token
 
+    async def close(self) -> None:
+        await self._client.aclose()
+
 
 class ClaudeProvider(TokenProvider):
     """Token provider for Claude AI."""
 
     def __init__(self, token_path: Path | None = None) -> None:
-        super().__init__('claude', token_path)
+        super().__init__('claude', ClaudeRefresher(), token_path)
 
     def _load(self, raw: str) -> ClaudeToken:
         return ClaudeToken(raw)

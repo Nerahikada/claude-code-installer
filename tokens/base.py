@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -12,39 +13,56 @@ class TokenRefreshError(Exception):
     """Raised when token refresh fails unexpectedly."""
 
 
-class TokenSplitError(Exception):
-    """Raised when dual refresh produced only one token (server token is healthy)."""
-
-
 class OAuthToken(ABC):
-    """Abstract base for an OAuth token set (access + refresh)."""
+    """Abstract base for an OAuth token set (access + refresh). Pure data, no I/O."""
 
     @property
     @abstractmethod
-    def is_expired(self) -> bool: ...
-
-    @abstractmethod
-    async def refresh(self, force: bool = False) -> OAuthToken | None:
-        """Refresh this token. Returns new instance, or None if re-login required."""
+    def expires_at(self) -> float:
+        """Unix timestamp (seconds) when the access_token expires."""
         ...
+
+    @property
+    def is_expired(self) -> bool:
+        return time.time() >= self.expires_at
 
     @abstractmethod
     def serialize(self) -> str:
-        """Serialize token data to a string suitable for client consumption."""
+        """Serialize for server-side persistence (includes refresh_token)."""
         ...
+
+    def serialize_for_client(self) -> str:
+        """Serialize for client distribution. Override to strip secrets."""
+        return self.serialize()
 
     def __str__(self) -> str:
         return self.serialize()
 
 
+class TokenRefresher(ABC):
+    """Handles the HTTP refresh call for a specific OAuth provider."""
+
+    @abstractmethod
+    async def refresh(self, token: OAuthToken, *, force: bool = False) -> OAuthToken | None:
+        """Refresh the given token. Returns a new instance, or None if re-login required."""
+        ...
+
+    async def close(self) -> None:
+        """Release any held resources (HTTP clients, etc.)."""
+
+
 DATA_DIR = Path(__file__).parent / 'data'
+
+
+MIN_CLIENT_VALIDITY_SECONDS = 3600  # Refresh before handing out if remaining < 1h.
 
 
 class TokenProvider(ABC):
     """Manages OAuth tokens for a single provider (Claude, Codex, etc.)."""
 
-    def __init__(self, name: str, token_path: Path | None = None) -> None:
+    def __init__(self, name: str, refresher: TokenRefresher, token_path: Path | None = None) -> None:
         self.name = name
+        self._refresher = refresher
         self._token_path = token_path or DATA_DIR / f'{name}.json'
         self._lock = asyncio.Lock()
         self._token: OAuthToken | None = None
@@ -69,7 +87,7 @@ class TokenProvider(ABC):
             try:
                 token = self.load()
                 if token.is_expired:
-                    new_token = await token.refresh()
+                    new_token = await self._refresher.refresh(token)
                     if new_token is None:
                         logger.error(f'[{self.name}] Re-login required to refresh token')
                         return token
@@ -84,45 +102,38 @@ class TokenProvider(ABC):
         """Force a token refresh regardless of expiration."""
         async with self._lock:
             token = self.load()
-            new_token = await token.refresh(force=True)
+            new_token = await self._refresher.refresh(token, force=True)
             if new_token is None:
                 raise TokenRefreshError(f'[{self.name}] Force refresh failed, re-login required')
             self._save(new_token)
             return new_token
 
-    async def generate_for_client(self) -> OAuthToken:
-        """Generate an independent token set for client distribution.
+    async def token_for_client(self) -> OAuthToken:
+        """Return the current access_token for client distribution.
 
-        Exploits the OAuth server's grace period before refresh-token
-        invalidation: two parallel refreshes from the same token can each
-        yield an independent token pair.
+        Anthropic's OAuth server enforces strict single-use refresh_token
+        rotation with no grace period, so we cannot mint independent tokens
+        per client. All clients share the server's current access_token.
 
-        - 2 succeed → save one (server), return the other (client).
-        - 1 succeeds → server token preserved, raise TokenSplitError
-          (client should retry).
-        - 0 succeed → should not happen under normal operation (seed is
-          validated at startup); indicates an external problem.
+        If the cached token has less than MIN_CLIENT_VALIDITY_SECONDS
+        remaining, refresh first so the new client gets a useful lifetime.
+        Refreshing invalidates any previously-distributed tokens, so we
+        only do it when necessary.
         """
         async with self._lock:
             token = self.load()
-            results = await asyncio.gather(
-                token.refresh(force=True),
-                token.refresh(force=True),
-                return_exceptions=True,
+            remaining = token.expires_at - time.time()
+            if remaining >= MIN_CLIENT_VALIDITY_SECONDS:
+                return token
+            logger.info(
+                f'[{self.name}] Token has {remaining:.0f}s remaining'
+                f' (< {MIN_CLIENT_VALIDITY_SECONDS}s), refreshing before handout'
             )
-            valid = [r for r in results if isinstance(r, OAuthToken)]
-
-            if len(valid) == 2:
-                self._save(valid[0])
-                logger.info(f'[{self.name}] Generated independent client token')
-                return valid[1]
-
-            if len(valid) == 1:
-                self._save(valid[0])
-                raise TokenSplitError(f'[{self.name}] Token split failed, server token preserved')
-
-            errors = [r for r in results if isinstance(r, Exception)]
-            raise TokenRefreshError(f'[{self.name}] Both refreshes failed: {errors}')
+            new_token = await self._refresher.refresh(token, force=True)
+            if new_token is None:
+                raise TokenRefreshError(f'[{self.name}] Refresh failed, re-login required')
+            self._save(new_token)
+            return new_token
 
     def _save(self, token: OAuthToken) -> None:
         self._token_path.write_text(token.serialize())

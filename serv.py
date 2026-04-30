@@ -19,8 +19,6 @@ from starlette.staticfiles import StaticFiles
 if TYPE_CHECKING:
     from tokens.base import TokenProvider
 
-from tokens.base import TokenSplitError
-
 PUBLIC_DIR = Path('public')
 
 _providers: dict[str, TokenProvider] = {}
@@ -86,19 +84,12 @@ async def get_token(request: Request) -> Response:
     logger.debug(f'{_client_ip(request)} GET /api/tokens/{provider_name}')
 
     try:
-        client_token = await provider.generate_for_client()
-    except TokenSplitError as e:
-        logger.warning(f'[{provider_name}] {e}')
-        return JSONResponse(
-            {'error': 'Token generation temporarily unavailable'},
-            status_code=503,
-            headers={'Retry-After': '1'},
-        )
+        client_token = await provider.token_for_client()
     except Exception as e:
-        logger.error(f'[{provider_name}] Failed to generate client token: {e}')
-        return JSONResponse({'error': 'Token generation failed'}, status_code=500)
+        logger.error(f'[{provider_name}] Failed to provide client token: {e}')
+        return JSONResponse({'error': 'Token unavailable'}, status_code=500)
 
-    return PlainTextResponse(client_token.serialize(), media_type='application/json')
+    return PlainTextResponse(client_token.serialize_for_client(), media_type='application/json')
 
 
 routes = [
