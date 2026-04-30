@@ -13,6 +13,12 @@ TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
 CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 DEFAULT_SCOPES = ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers', 'user:file_upload']
 
+# Cloudflare aggressively rate-limits the token endpoint for unrecognized
+# User-Agents. The official CLI's UA bypasses this. Without it we see
+# 429 within a few requests followed by a multi-minute lockout.
+USER_AGENT = 'claude-cli/2.0.0'
+
+
 class ClaudeToken(OAuthToken):
     """Claude AI OAuth token."""
 
@@ -99,7 +105,7 @@ class ClaudeRefresher(TokenRefresher):
             resp = await self._client.post(
                 TOKEN_URL,
                 json=body,
-                headers={'Content-Type': 'application/json'},
+                headers={'Content-Type': 'application/json', 'User-Agent': USER_AGENT},
             )
         except httpx.HTTPError as e:
             raise TokenRefreshError(f'HTTP request failed: {e}') from e
