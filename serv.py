@@ -4,108 +4,59 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-import uvicorn
 from loguru import logger
 from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-if TYPE_CHECKING:
-    from tokens.claude import ClaudeProvider
-
 PUBLIC_DIR = Path('public')
+RATE_LIMIT = 10            # requests per IP
+RATE_WINDOW = 60.0         # ...within this many seconds
 
-_providers: dict[str, ClaudeProvider] = {}
-
-
-def register_provider(provider: ClaudeProvider) -> None:
-    _providers[provider.name] = provider
+_request_log: dict[str, list[float]] = defaultdict(list)
 
 
-class RateLimiter:
-    """IP-based sliding-window rate limiter."""
-
-    def __init__(self, max_requests: int = 10, window_seconds: float = 60) -> None:
-        self._max_requests = max_requests
-        self._window = window_seconds
-        self._requests: dict[str, list[float]] = defaultdict(list)
-
-    def is_allowed(self, ip: str) -> bool:
-        now = time.monotonic()
-        timestamps = [t for t in self._requests[ip] if now - t < self._window]
-        if len(timestamps) >= self._max_requests:
-            self._requests[ip] = timestamps
-            return False
-        timestamps.append(now)
-        self._requests[ip] = timestamps
-        return True
+def _client_ip(req: Request) -> str:
+    for h in ('x-forwarded-for', 'x-real-ip'):
+        v = req.headers.get(h)
+        if v:
+            return v.split(',')[0].strip()
+    return req.client.host if req.client else 'unknown'
 
 
-_rate_limiter = RateLimiter()
+def _rate_limit_ok(ip: str) -> bool:
+    now = time.monotonic()
+    log = [t for t in _request_log[ip] if now - t < RATE_WINDOW]
+    _request_log[ip] = log
+    if len(log) >= RATE_LIMIT:
+        return False
+    log.append(now)
+    return True
 
 
-def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get('x-forwarded-for')
-    if forwarded:
-        return forwarded.split(',')[0].strip()
-    real_ip = request.headers.get('x-real-ip')
-    if real_ip:
-        return real_ip.strip()
-    return request.client.host if request.client else 'unknown'
+def build_app(provider) -> Starlette:
+    async def get_token(req: Request) -> Response:
+        ip = _client_ip(req)
+        if not _rate_limit_ok(ip):
+            logger.warning(f'Rate limit exceeded for {ip}')
+            return JSONResponse({'error': 'Rate limit exceeded'}, status_code=429)
 
+        if req.path_params['provider'] != provider.name:
+            return JSONResponse({'error': 'Unknown provider'}, status_code=404)
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Apply rate limiting to /api/* routes."""
+        logger.debug(f'{ip} GET /api/tokens/{provider.name}')
+        try:
+            client_json = await provider.token_for_client()
+        except Exception as e:
+            logger.error(f'[{provider.name}] Failed to provide token: {e}')
+            return JSONResponse({'error': 'Token unavailable'}, status_code=500)
 
-    async def dispatch(self, request: Request, call_next):
-        if request.url.path.startswith('/api/'):
-            ip = _client_ip(request)
-            if not _rate_limiter.is_allowed(ip):
-                logger.warning(f'Rate limit exceeded for {ip} on {request.url.path}')
-                return JSONResponse({'error': 'Rate limit exceeded'}, status_code=429)
-        return await call_next(request)
+        return PlainTextResponse(client_json, media_type='application/json')
 
-
-async def get_token(request: Request) -> Response:
-    provider_name = request.path_params['provider']
-    provider = _providers.get(provider_name)
-    if provider is None:
-        return JSONResponse({'error': f'Unknown provider: {provider_name}'}, status_code=404)
-
-    if provider.token is None:
-        return JSONResponse({'error': 'Token not yet available'}, status_code=503)
-
-    logger.debug(f'{_client_ip(request)} GET /api/tokens/{provider_name}')
-
-    try:
-        client_json = await provider.token_for_client()
-    except Exception as e:
-        logger.error(f'[{provider_name}] Failed to provide client token: {e}')
-        return JSONResponse({'error': 'Token unavailable'}, status_code=500)
-
-    return PlainTextResponse(client_json, media_type='application/json')
-
-
-routes = [
-    Route('/api/tokens/{provider}', get_token),
-    Mount('/', app=StaticFiles(directory=str(PUBLIC_DIR), html=True)),
-]
-
-app = Starlette(
-    routes=routes,
-    middleware=[Middleware(RateLimitMiddleware)],
-)
-
-
-async def run_server(host: str, port: int) -> None:
-    """Run the HTTP server asynchronously."""
-    config = uvicorn.Config(app, host=host, port=port, log_level='warning', access_log=False)
-    server = uvicorn.Server(config)
-    logger.info(f'Server running at http://{host}:{port}')
-    await server.serve()
+    return Starlette(routes=[
+        Route('/api/tokens/{provider}', get_token),
+        Mount('/', app=StaticFiles(directory=str(PUBLIC_DIR), html=True)),
+    ])
