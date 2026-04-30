@@ -17,14 +17,14 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 if TYPE_CHECKING:
-    from tokens.base import TokenProvider
+    from tokens.claude import ClaudeProvider
 
 PUBLIC_DIR = Path('public')
 
-_providers: dict[str, TokenProvider] = {}
+_providers: dict[str, ClaudeProvider] = {}
 
 
-def register_provider(provider: TokenProvider) -> None:
+def register_provider(provider: ClaudeProvider) -> None:
     _providers[provider.name] = provider
 
 
@@ -84,12 +84,12 @@ async def get_token(request: Request) -> Response:
     logger.debug(f'{_client_ip(request)} GET /api/tokens/{provider_name}')
 
     try:
-        client_token = await provider.token_for_client()
+        client_json = await provider.token_for_client()
     except Exception as e:
         logger.error(f'[{provider_name}] Failed to provide client token: {e}')
         return JSONResponse({'error': 'Token unavailable'}, status_code=500)
 
-    return PlainTextResponse(client_token.serialize_for_client(), media_type='application/json')
+    return PlainTextResponse(client_json, media_type='application/json')
 
 
 routes = [
