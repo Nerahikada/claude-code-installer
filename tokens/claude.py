@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 import httpx
 from loguru import logger
@@ -33,41 +35,13 @@ class TokenRefreshError(Exception):
 
 
 @dataclass(frozen=True)
-class ClaudeToken:
-    """Claude OAuth token — pure value object."""
+class OAuthToken:
+    """A standard OAuth 2.0 token set (RFC 6749). Provider-agnostic."""
 
     access_token: str
     refresh_token: str
     expires_at_ms: int
     scopes: list[str]
-    subscription_type: str | None = None
-    rate_limit_tier: str | None = None
-
-    @classmethod
-    def from_json(cls, raw: str) -> ClaudeToken:
-        """Parse from the on-disk JSON format ({"claudeAiOauth": {...}})."""
-        d = json.loads(raw)['claudeAiOauth']
-        return cls(
-            access_token=d['accessToken'],
-            refresh_token=d.get('refreshToken', ''),
-            expires_at_ms=d.get('expiresAt', 0),
-            scopes=d.get('scopes') or DEFAULT_SCOPES,
-            subscription_type=d.get('subscriptionType'),
-            rate_limit_tier=d.get('rateLimitTier'),
-        )
-
-    @classmethod
-    def from_oauth_response(cls, prev: ClaudeToken, resp: dict) -> ClaudeToken:
-        """Build the rotated token from an OAuth refresh response, falling
-        back to the previous token's metadata for fields the server omits."""
-        return cls(
-            access_token=resp['access_token'],
-            refresh_token=resp.get('refresh_token', prev.refresh_token),
-            expires_at_ms=int(time.time() * 1000) + resp.get('expires_in', 0) * 1000,
-            scopes=(resp.get('scope') or '').split() or prev.scopes,
-            subscription_type=prev.subscription_type,
-            rate_limit_tier=prev.rate_limit_tier,
-        )
 
     @property
     def expires_at(self) -> float:
@@ -80,6 +54,40 @@ class ClaudeToken:
     @property
     def is_expired(self) -> bool:
         return self.remaining <= 0
+
+    def rotated(self, resp: dict) -> Self:
+        """Return a new token reflecting an OAuth refresh response.
+
+        Provider-specific fields on subclasses are carried over via
+        ``dataclasses.replace``."""
+        return dataclasses.replace(
+            self,
+            access_token=resp['access_token'],
+            refresh_token=resp.get('refresh_token', self.refresh_token),
+            expires_at_ms=int(time.time() * 1000) + resp.get('expires_in', 0) * 1000,
+            scopes=(resp.get('scope') or '').split() or self.scopes,
+        )
+
+
+@dataclass(frozen=True)
+class ClaudeToken(OAuthToken):
+    """Claude OAuth token — adds Anthropic subscription metadata."""
+
+    subscription_type: str | None = None
+    rate_limit_tier: str | None = None
+
+    @classmethod
+    def from_json(cls, raw: str) -> ClaudeToken:
+        """Parse from the on-disk JSON format (``{"claudeAiOauth": {...}}``)."""
+        d = json.loads(raw)['claudeAiOauth']
+        return cls(
+            access_token=d['accessToken'],
+            refresh_token=d.get('refreshToken', ''),
+            expires_at_ms=d.get('expiresAt', 0),
+            scopes=d.get('scopes') or DEFAULT_SCOPES,
+            subscription_type=d.get('subscriptionType'),
+            rate_limit_tier=d.get('rateLimitTier'),
+        )
 
     def to_json(self) -> str:
         """Full JSON for server-side persistence (includes refresh_token)."""
@@ -130,7 +138,7 @@ class ClaudeFactory:
         if resp.status_code != 200:
             raise TokenRefreshError(f'Refresh failed ({resp.status_code}): {resp.text}')
 
-        return ClaudeToken.from_oauth_response(token, resp.json())
+        return token.rotated(resp.json())
 
     async def close(self) -> None:
         await self._client.aclose()
