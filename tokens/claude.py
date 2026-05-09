@@ -145,37 +145,66 @@ class ClaudeFactory:
         await self._client.aclose()
 
 
+DEFAULT_PATH = Path(__file__).parent / 'data' / 'claude.json'
+
+
+class TokenStore:
+    """Persistence layer for ClaudeToken — owns the disk file and an
+    in-memory cache. Hides the memory/disk duality from the Provider.
+
+    Not thread-safe; callers (Provider) serialize access via a lock."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._cache: ClaudeToken | None = None
+
+    @property
+    def cached(self) -> ClaudeToken | None:
+        """Current cache value without I/O. ``None`` until first load."""
+        return self._cache
+
+    def current(self) -> ClaudeToken:
+        """Return the cached token, lazy-loading from disk on first call."""
+        if self._cache is None:
+            self._cache = ClaudeToken.from_json(self._path.read_text())
+        return self._cache
+
+    def reload(self) -> ClaudeToken:
+        """Re-read disk and refresh the cache."""
+        self._cache = ClaudeToken.from_json(self._path.read_text())
+        return self._cache
+
+    def replace(self, token: ClaudeToken) -> None:
+        """Persist ``token`` to disk, then update the in-memory cache.
+
+        Disk-first ordering: if the write throws, the cache stays on the
+        previous value, keeping memory and disk consistent."""
+        self._path.write_text(token.to_json())
+        self._cache = token
+        logger.info(f'[claude] Token refreshed and saved ({self._path})')
+
+
 class ClaudeProvider:
-    """Manages the seed token: persists to disk, refreshes on demand,
-    serves access_tokens to clients (refresh_token never leaves the server)."""
+    """Orchestrates token lifecycle: lock + factory + store + policy.
+    Persistence lives in TokenStore; HTTP refresh lives in ClaudeFactory."""
 
     name = 'claude'
 
     def __init__(self, token_path: Path | None = None) -> None:
-        self._path = token_path or Path(__file__).parent / 'data' / 'claude.json'
         self._lock = asyncio.Lock()
         self._factory = ClaudeFactory()
-        self._token: ClaudeToken | None = None
+        self._store = TokenStore(token_path or DEFAULT_PATH)
 
     @property
     def token(self) -> ClaudeToken | None:
-        return self._token
-
-    def _load(self) -> ClaudeToken:
-        self._token = ClaudeToken.from_json(self._path.read_text())
-        return self._token
-
-    def _save(self, token: ClaudeToken) -> None:
-        self._path.write_text(token.to_json())
-        self._token = token
-        logger.info(f'[{self.name}] Token refreshed and saved')
+        return self._store.cached
 
     async def force_refresh(self) -> ClaudeToken:
         """Refresh once at startup to validate the seed."""
         async with self._lock:
-            token = self._load()
+            token = self._store.reload()
             new_token = await self._factory.refresh(token)
-            self._save(new_token)
+            self._store.replace(new_token)
             return new_token
 
     async def token_for_client(self) -> str:
@@ -185,14 +214,14 @@ class ClaudeProvider:
         kicking any current holders so the new client gets useful lifetime.
         """
         async with self._lock:
-            token = self._load()
+            token = self._store.current()
             if token.remaining < MIN_CLIENT_VALIDITY:
                 logger.info(
                     f'[{self.name}] {token.remaining:.0f}s remaining'
                     f' (< {MIN_CLIENT_VALIDITY}s), refreshing before handout'
                 )
                 token = await self._factory.refresh(token)
-                self._save(token)
+                self._store.replace(token)
         return token.to_client_json()
 
     async def keep_fresh_loop(self) -> None:
@@ -200,10 +229,10 @@ class ClaudeProvider:
         while True:
             try:
                 async with self._lock:
-                    token = self._load()
+                    token = self._store.current()
                     if token.is_expired:
                         new_token = await self._factory.refresh(token)
-                        self._save(new_token)
+                        self._store.replace(new_token)
             except Exception as e:
                 logger.error(f'[{self.name}] keep_fresh failed: {e}')
             await asyncio.sleep(random.uniform(300, 600))
