@@ -47,7 +47,6 @@ def build_app(provider) -> Starlette:
         if req.path_params['provider'] != provider.name:
             return JSONResponse({'error': 'Unknown provider'}, status_code=404)
 
-        logger.debug(f'{ip} GET /api/tokens/{provider.name}')
         try:
             client_json = await provider.token_for_client()
         except Exception as e:
