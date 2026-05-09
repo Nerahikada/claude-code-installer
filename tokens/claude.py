@@ -71,23 +71,29 @@ class OAuthToken:
 
 @dataclass(frozen=True)
 class ClaudeToken(OAuthToken):
-    """Claude OAuth token — adds Anthropic subscription metadata."""
+    """Adds Anthropic subscription metadata. Stores expires in milliseconds
+    additionally (the format Anthropic's JSON uses) so the disk roundtrip
+    is lossless — converting through OAuthToken's float seconds would lose
+    ±1 ms of precision."""
 
     subscription_type: str | None = None
     rate_limit_tier: str | None = None
+    expires_at_ms: int = 0    # MUST stay consistent with self.expires_at; both set in constructors
 
     @classmethod
     def from_json(cls, raw: str) -> ClaudeToken:
         """Parse from the on-disk JSON format (``{"claudeAiOauth": {...}}``).
         Anthropic stores ``expiresAt`` in milliseconds since epoch."""
         d = json.loads(raw)['claudeAiOauth']
+        ms = d.get('expiresAt', 0)
         return cls(
             access_token=d['accessToken'],
             refresh_token=d.get('refreshToken', ''),
-            expires_at=d.get('expiresAt', 0) / 1000,
+            expires_at=ms / 1000,                 # OAuthToken.expires_at (lossy view)
             scopes=d.get('scopes') or DEFAULT_SCOPES,
             subscription_type=d.get('subscriptionType'),
             rate_limit_tier=d.get('rateLimitTier'),
+            expires_at_ms=ms,                     # exact ms (authoritative for disk roundtrip)
         )
 
     def to_json(self) -> str:
@@ -95,7 +101,7 @@ class ClaudeToken(OAuthToken):
         return json.dumps({'claudeAiOauth': {
             'accessToken': self.access_token,
             'refreshToken': self.refresh_token,
-            'expiresAt': int(self.expires_at * 1000),
+            'expiresAt': self.expires_at_ms,     # use exact ms — no float conversion
             'scopes': self.scopes,
             'subscriptionType': self.subscription_type,
             'rateLimitTier': self.rate_limit_tier,
@@ -105,11 +111,24 @@ class ClaudeToken(OAuthToken):
         """JSON for client distribution — refresh_token stripped."""
         return json.dumps({'claudeAiOauth': {
             'accessToken': self.access_token,
-            'expiresAt': int(self.expires_at * 1000),
+            'expiresAt': self.expires_at_ms,
             'scopes': self.scopes,
             'subscriptionType': self.subscription_type,
             'rateLimitTier': self.rate_limit_tier,
         }})
+
+    def rotated(self, resp: dict) -> ClaudeToken:
+        """Override: derive ms from expires_in (integer arithmetic) and set
+        both expires_at and expires_at_ms consistently."""
+        ms = int(time.time() * 1000) + resp.get('expires_in', 0) * 1000
+        return dataclasses.replace(
+            self,
+            access_token=resp['access_token'],
+            refresh_token=resp.get('refresh_token', self.refresh_token),
+            expires_at=ms / 1000,
+            scopes=(resp.get('scope') or '').split() or self.scopes,
+            expires_at_ms=ms,
+        )
 
 
 class ClaudeFactory:
