@@ -36,6 +36,10 @@ export function getInitialOS() {
     return detectOSFromBrowser();
 }
 
+export function saveSelection(mode, os) {
+    window.location.hash = `${mode}/${os}`;
+}
+
 export function getLanguageForOS(os) {
     return os === 'windows' ? 'powershell' : 'bash';
 }
