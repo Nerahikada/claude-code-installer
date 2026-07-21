@@ -8,7 +8,7 @@ from pathlib import Path
 from loguru import logger
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse, Response
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -37,14 +37,17 @@ def _rate_limit_ok(ip: str) -> bool:
     return True
 
 
-def build_app(provider) -> Starlette:
+def build_app(providers: list) -> Starlette:
+    _providers = {p.name: p for p in providers}
+
     async def get_token(req: Request) -> Response:
         ip = _client_ip(req)
         if not _rate_limit_ok(ip):
             logger.warning(f'Rate limit exceeded for {ip}')
             return JSONResponse({'error': 'Rate limit exceeded'}, status_code=429)
 
-        if req.path_params['provider'] != provider.name:
+        provider = _providers.get(req.path_params['provider'])
+        if provider is None:
             return JSONResponse({'error': 'Unknown provider'}, status_code=404)
 
         try:
@@ -53,7 +56,7 @@ def build_app(provider) -> Starlette:
             logger.error(f'[{provider.name}] Failed to provide token: {e}')
             return JSONResponse({'error': 'Token unavailable'}, status_code=500)
 
-        return PlainTextResponse(client_json, media_type='application/json')
+        return Response(client_json, media_type='application/json')
 
     return Starlette(routes=[
         Route('/api/tokens/{provider}', get_token),
