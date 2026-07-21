@@ -38,11 +38,14 @@ async def main() -> None:
     await provider.force_refresh()
     logger.info(f'[{provider.name}] Provider ready')
 
-    config = uvicorn.Config(build_app(provider), host=HOST, port=PORT, log_config=None)
+    config = uvicorn.Config(build_app([provider]), host=HOST, port=PORT, log_config=None)
     server = uvicorn.Server(config)
     logger.info(f'Server running at http://{HOST}:{PORT}')
 
-    await asyncio.gather(server.serve(), provider.keep_fresh_loop())
+    try:
+        await asyncio.gather(server.serve(), provider.keep_fresh_loop())
+    finally:
+        await provider.close()
 
 
 if __name__ == '__main__':
