@@ -82,10 +82,8 @@ function createApp(token) {
     }
 
     async function handleCopy() {
-        const code = await getCommand();
-
         try {
-            await copyToClipboard(code);
+            await copyToClipboard(elements.codeDisplay.textContent);
             showCopySuccess();
         } catch (err) {
             console.error('Copy failed:', err);
@@ -107,5 +105,5 @@ function createApp(token) {
 
 document.addEventListener('DOMContentLoaded', async () => {
     const token = await fetchToken();
-    createApp(token).init();
+    await createApp(token).init();
 });
