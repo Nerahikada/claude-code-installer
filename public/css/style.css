@@ -181,6 +181,67 @@ header h1 {
     height: 16px;
 }
 
+.token-status {
+    --status-color: var(--success);
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Handed-out tokens always have 1h-8h left (server refreshes below 1h). */
+.token-status[data-level="moderate"] {
+    --status-color: var(--accent-hover);
+}
+
+.token-status[data-level="low"] {
+    --status-color: var(--accent);
+}
+
+.token-status-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.token-status-label {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.token-status-remaining {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--status-color);
+}
+
+.token-bar {
+    height: 8px;
+    background: var(--bg-tertiary);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.token-bar-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 999px;
+    background: var(--status-color);
+    transition: width 0.6s ease;
+}
+
+.token-status-expiry {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .token-bar-fill { transition: none; }
+}
+
 footer {
     text-align: center;
     margin-top: 24px;
