@@ -17,8 +17,8 @@ function humanRemaining(ms) {
     const mins = Math.max(0, Math.round(ms / 60000));
     const h = Math.floor(mins / 60);
     const m = mins % 60;
-    if (h === 0) return `残り約${m}分`;
-    return m === 0 ? `残り約${h}時間` : `残り約${h}時間${m}分`;
+    if (h === 0) return `残り${m}分`;
+    return m === 0 ? `残り${h}時間` : `残り${h}時間${m}分`;
 }
 
 function levelFor(ms) {
@@ -45,9 +45,4 @@ export function initTokenStatus(tokenJson) {
     const pct = Math.max(0, Math.min(1, remaining / FULL_LIFETIME_MS)) * 100;
     document.getElementById('token-bar-fill').style.width = `${pct}%`;
     document.getElementById('token-bar').setAttribute('aria-valuenow', String(Math.round(pct)));
-
-    document.getElementById('token-expiry').textContent =
-        `${new Date(expiresAt).toLocaleString('ja-JP', {
-            month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-        })} まで有効`;
 }

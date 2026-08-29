@@ -233,11 +233,6 @@ header h1 {
     transition: width 0.6s ease;
 }
 
-.token-status-expiry {
-    font-size: 0.72rem;
-    color: var(--text-secondary);
-}
-
 @media (prefers-reduced-motion: reduce) {
     .token-bar-fill { transition: none; }
 }
