@@ -215,6 +215,27 @@ current split gives up bootstrap-blocking as a belt (leaving the
 `accountUuid` guard as the only defence there) in exchange for keeping
 those unrelated features working.
 
+## Other `settings.json` keys
+
+Alongside the `env` block, `~/.claude/settings.json` gets a top-level
+flag:
+
+```json
+"disableRemoteControl": true
+```
+
+`disableRemoteControl: true` is the direct switch for the `/rc`
+(Remote Control) pairing — sessions do not sync to `claude.ai/code`,
+the CLI refuses remote-control connections, and `/rc` is a no-op.
+The env-var routes already stop Remote Control today because it
+depends on GrowthBook and telemetry (both off), but that is a side
+effect of the feature-flag pipeline being disabled; if Anthropic
+ever moves Remote Control off feature flags, the env vars alone
+would no longer block it. This key does.
+
+Stricter than `remoteControlAtStartup: false`, which only suppresses
+the auto-connect on launch and still allows manual `/rc` pairing.
+
 ## What this does not change
 
 Authentication is untouched. The credential store (`~/.claude/.credentials.json`)
