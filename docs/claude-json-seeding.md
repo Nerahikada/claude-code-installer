@@ -217,11 +217,12 @@ those unrelated features working.
 
 ## Other `settings.json` keys
 
-Alongside the `env` block, `~/.claude/settings.json` gets a top-level
-flag:
+Alongside the `env` block, `~/.claude/settings.json` gets two top-level
+flags:
 
 ```json
-"disableRemoteControl": true
+"disableRemoteControl": true,
+"enableArtifact": false
 ```
 
 `disableRemoteControl: true` is the direct switch for the `/rc`
@@ -235,6 +236,27 @@ would no longer block it. This key does.
 
 Stricter than `remoteControlAtStartup: false`, which only suppresses
 the auto-connect on launch and still allows manual `/rc` pairing.
+
+`enableArtifact: false` turns off the `Artifact` tool, so Claude
+Code cannot publish an HTML/Markdown page to `claude.ai/code/artifact/`
+even when a design or dataviz skill loads. The binary defines it as
+the canonical key with `defaultOn:true`, so an explicit `false` is
+required:
+
+```js
+var y={enableKey:"enableArtifact",legacyDisableKey:"disableArtifact",
+       envDisableVar:"CLAUDE_CODE_DISABLE_ARTIFACT",defaultOn:!0};
+```
+
+Two equivalents exist and either would work: the legacy
+`disableArtifact: true` (still recognised) and the
+`CLAUDE_CODE_DISABLE_ARTIFACT=1` env var. `enableArtifact` is
+non-restrictive in the settings-precedence table
+(`{path:["enableArtifact"],restrictive:!1}`), so a project-scope
+`settings.json` can still re-enable artifacts by writing
+`enableArtifact: true`. If you want the hard lockdown that a
+project cannot loosen, use the legacy `disableArtifact: true`
+instead — it is marked restrictive.
 
 ## What this does not change
 
