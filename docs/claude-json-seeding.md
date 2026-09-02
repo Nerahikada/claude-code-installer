@@ -157,7 +157,8 @@ the `CLAUDE_CODE_USER_EMAIL` env seed only forms an account when the trio
   "DISABLE_ERROR_REPORTING": "1",
   "DISABLE_BUG_COMMAND": "1",
   "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
-  "ENABLE_CLAUDEAI_MCP_SERVERS": "0"
+  "ENABLE_CLAUDEAI_MCP_SERVERS": "0",
+  "DISABLE_GROWTHBOOK": "1"
 }
 ```
 
@@ -198,6 +199,12 @@ function A(e){if(e===void 0)return!1;if(typeof e==="boolean")return!e;
 // caller: let r=lu(process.env.ENABLE_CLAUDEAI_MCP_SERVERS),o=G1e();
 //         if(r||o)return b(`[claudeai-mcp] Disabled via ${r?"env var":"disableClaudeAiConnectors setting"}`),…,{};
 ```
+
+`DISABLE_GROWTHBOOK=1` is a belt over the suspenders. GrowthBook is already
+off because it rides the `no-telemetry` channel that `DISABLE_TELEMETRY=1`
+selects, but the flag is checked at its own call site as well, so setting
+it explicitly keeps GrowthBook disabled even if a future release rewires
+the feature-flag pipeline off the telemetry channel.
 
 An earlier draft used `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` instead
 of `DISABLE_TELEMETRY=1`. That single variable also blocks the bootstrap
