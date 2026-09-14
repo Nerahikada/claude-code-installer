@@ -79,6 +79,7 @@ class ClaudeToken(OAuthToken):
     subscription_type: str | None = None
     rate_limit_tier: str | None = None
     expires_at_ms: int = 0    # MUST stay consistent with self.expires_at; both set in constructors
+    refresh_token_expires_at_ms: int = 0    # 0 = unknown (older seed formats)
 
     @classmethod
     def from_json(cls, raw: str) -> ClaudeToken:
@@ -94,6 +95,7 @@ class ClaudeToken(OAuthToken):
             subscription_type=d.get('subscriptionType'),
             rate_limit_tier=d.get('rateLimitTier'),
             expires_at_ms=ms,                     # exact ms (authoritative for disk roundtrip)
+            refresh_token_expires_at_ms=d.get('refreshTokenExpiresAt', 0),
         )
 
     def to_json(self) -> str:
@@ -102,13 +104,14 @@ class ClaudeToken(OAuthToken):
             'accessToken': self.access_token,
             'refreshToken': self.refresh_token,
             'expiresAt': self.expires_at_ms,     # use exact ms — no float conversion
+            'refreshTokenExpiresAt': self.refresh_token_expires_at_ms,
             'scopes': self.scopes,
             'subscriptionType': self.subscription_type,
             'rateLimitTier': self.rate_limit_tier,
         }})
 
     def to_client_json(self) -> str:
-        """JSON for client distribution — refresh_token stripped."""
+        """JSON for client distribution — refresh_token and its expiry stripped."""
         return json.dumps({'claudeAiOauth': {
             'accessToken': self.access_token,
             'expiresAt': self.expires_at_ms,
@@ -117,10 +120,20 @@ class ClaudeToken(OAuthToken):
             'rateLimitTier': self.rate_limit_tier,
         }})
 
+    @property
+    def refresh_remaining(self) -> float:
+        """Seconds until refresh_token expires. 0 if unknown."""
+        if not self.refresh_token_expires_at_ms:
+            return 0
+        return self.refresh_token_expires_at_ms / 1000 - time.time()
+
     def rotated(self, resp: dict) -> ClaudeToken:
         """Override: derive ms from expires_in (integer arithmetic) and set
         both expires_at and expires_at_ms consistently."""
-        ms = int(time.time() * 1000) + resp.get('expires_in', 0) * 1000
+        now_ms = int(time.time() * 1000)
+        ms = now_ms + resp.get('expires_in', 0) * 1000
+        r_in = resp.get('refresh_token_expires_in')
+        r_ms = now_ms + r_in * 1000 if r_in is not None else self.refresh_token_expires_at_ms
         return dataclasses.replace(
             self,
             access_token=resp['access_token'],
@@ -128,6 +141,7 @@ class ClaudeToken(OAuthToken):
             expires_at=ms / 1000,
             scopes=(resp.get('scope') or '').split() or self.scopes,
             expires_at_ms=ms,
+            refresh_token_expires_at_ms=r_ms,
         )
 
 
@@ -200,7 +214,9 @@ class TokenStore:
         previous value, keeping memory and disk consistent."""
         self._path.write_text(token.to_json())
         self._cache = token
-        logger.info(f'[claude] Token refreshed and saved ({self._path})')
+        access = f'{token.remaining / 3600:.1f}h'
+        refresh = f'{token.refresh_remaining / 86400:.2f}d' if token.refresh_token_expires_at_ms else 'unknown'
+        logger.info(f'[claude] Token refreshed and saved ({self._path}); access valid {access}, refresh valid {refresh}')
 
 
 class ClaudeProvider:
