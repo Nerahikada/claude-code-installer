@@ -27,7 +27,7 @@ USER_AGENT = 'claude-cli/2.0.0'
 
 # Refresh before client handout if the cached access_token has fewer than
 # this many seconds of validity remaining.
-MIN_CLIENT_VALIDITY = 3600
+MIN_CLIENT_VALIDITY = 1800
 
 
 class TokenRefreshError(Exception):
