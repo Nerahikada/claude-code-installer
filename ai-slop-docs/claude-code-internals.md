@@ -230,6 +230,37 @@ if(s){let{organizationUuid:u,emailAddress:l,accountUuid:p}=s;
  if(p&&m("OTEL_METRICS_INCLUDE_ACCOUNT_UUID")){r["user.account_uuid"]=p; …}}
 ```
 
+## Auto-mode classifier context (2.1.296)
+
+This section was read from 2.1.296, not 2.1.278; the minified names are from that build.
+
+The server-side switch is read from the env var once per session; `0` turns the server classifier off:
+
+```js
+function OGe(){let e=wo();if(e.userServerClassifierSwitch===void 0){
+  let n=a.CLAUDE_CODE_AUTO_MODE_SERVER;e.userServerClassifierSwitch=n===void 0?null:Ne(n)}
+  return e.userServerClassifierSwitch}
+```
+
+The identity sent as `classifier_context.user_identity`, and quoted in the client-side classifier prompt as `**User identity**`, prefers `GITHUB_ACTOR`:
+
+```js
+async function Arr(){if(Ce())return null;
+  let e=a.GITHUB_ACTOR??a.USER??a.USERNAME,n=e===void 0?await DRe():null;   // DRe(): git user.email
+  return(e??(n?Qe(n,"@"):null))?.replace(elo,"").slice(0,64)||null}
+```
+
+The context schema also carries `home_dir`, `live_cwd`, `rule_roots`, `rules`, `trusted_directories` and a `git_state` with `branch`, `status` and `visibility.remotes[]` (`host`, `remote` as `owner/repo`).
+
+`includeGitInstructions` is read through one helper, with an env-var override:
+
+```js
+function Cet(){let e=a.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS;if(e!==void 0)return!e;
+  return ft().includeGitInstructions??!0}
+```
+
+A capture of 2.1.296 with the policy applied, a canary login name, git user, remote and branch, and an auto-mode action outside the working directory showed none of the canaries in any request, with the action still classified and run.
+
 ## Re-running the audit
 
 The claude.ai surface grows every release while the reasoning doc does not.

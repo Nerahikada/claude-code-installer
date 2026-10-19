@@ -16,8 +16,8 @@ The code behind every claim is in `claude-code-internals.md`: snippets, minified
 | --- | --- | --- | --- |
 | `~/.claude.json` | `oauthAccount` fields | 11 | Part 1 |
 | `~/.claude.json` | `hasCompletedOnboarding` (root) | 1 | Part 1 |
-| `~/.claude/settings.json` | `env` variables | 7 | Part 2 |
-| `~/.claude/settings.json` | top-level keys | 12 | Part 2 |
+| `~/.claude/settings.json` | `env` variables | 9 | Part 2 |
+| `~/.claude/settings.json` | top-level keys | 13 | Part 2 |
 
 ```jsonc
 // ~/.claude.json
@@ -37,13 +37,15 @@ The code behind every claim is in `claude-code-internals.md`: snippets, minified
   "DISABLE_TELEMETRY": "1", "DISABLE_ERROR_REPORTING": "1",
   "DISABLE_BUG_COMMAND": "1", "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
   "ENABLE_CLAUDEAI_MCP_SERVERS": "0", "DISABLE_GROWTHBOOK": "1",
-  "CLAUDE_CODE_DISABLE_ORG_MEMORY": "1"
+  "CLAUDE_CODE_DISABLE_ORG_MEMORY": "1",
+  "CLAUDE_CODE_AUTO_MODE_SERVER": "0", "GITHUB_ACTOR": "user"
 },
 "disableRemoteControl": true,        "enableArtifact": false,
 "syncClaudeAiSkills": false,         "syncClaudeAiPlugins": false,
 "disableClaudeAiConnectors": true,   "autoUploadSessions": false,
 "channelsEnabled": false,            "inputNeededNotifEnabled": false,
 "agentPushNotifEnabled": false,      "skipWebFetchPreflight": false,
+"includeGitInstructions": false,
 "attribution": { "sessionUrl": false },
 "remoteControl": { "shareHostProfile": "off" }
 ```
@@ -123,6 +125,8 @@ Claude Code merges this block into `process.env` at startup for `~/.claude/setti
 | `ENABLE_CLAUDEAI_MCP_SERVERS=0` | Turns off the claude.ai connectors. Despite the name, the value is parsed by a negation helper, so a "disabled" string is what switches the feature off. `1` or leaving it unset both mean "not disabled". |
 | `DISABLE_GROWTHBOOK=1` | A belt over the suspenders (see below). |
 | `CLAUDE_CODE_DISABLE_ORG_MEMORY=1` | Blocks the org-memory feature (see below). |
+| `CLAUDE_CODE_AUTO_MODE_SERVER=0` | Classifies auto-mode actions on the client instead of the server, which removes the per-request classifier context (see below). |
+| `GITHUB_ACTOR=user` | Replaces the OS login name that the auto-mode classifier is told is the user (see below). |
 
 **`DISABLE_GROWTHBOOK=1`.**
 GrowthBook is already off because it uses the `no-telemetry` channel that `DISABLE_TELEMETRY=1` selects, but the flag is checked at its own call site as well, so setting it explicitly keeps GrowthBook disabled even if a future release rewires the feature-flag pipeline off the telemetry channel.
@@ -136,6 +140,22 @@ The env var is the only first-class switch: no `settings.json` key for it exists
 Writing to a mounted store needs one more thing on top of the feature gate — an explicit local opt-in recorded in `~/.claude.json` and checked against the current account — so the realistic exposure was always reads rather than silent writes.
 The env var closes both.
 Local memory under `~/.claude/projects/*/memory/` is unaffected; it never leaves the machine either way.
+
+**`CLAUDE_CODE_AUTO_MODE_SERVER=0` and `GITHUB_ACTOR=user`.**
+Auto mode is the default permission mode when none is configured, and it is a feature we want to keep.
+With the server-side classifier (the default when telemetry is off), every `/v1/messages` request carries a `safeguards[].classifier_context` block.
+It holds the OS login name as `user_identity`, the home and working directory paths, the git branch, every git remote as `host` plus `owner/repo`, the working-tree status counts, and the permission rules.
+None of that is needed for the request itself; it exists so the server can judge tool calls.
+
+Switching to the client-side classifier removes the block.
+The judgement then happens in a separate classification request, made only when an action needs one, and that request still names the user: `GITHUB_ACTOR`, then `USER`, then `USERNAME`, falling back to the local part of git `user.email`.
+`GITHUB_ACTOR` comes first, so setting it to a dummy value hides the login name without touching `USER`, which tools and scripts run by the Bash tool still see unchanged.
+The classifier uses the name only to recognise branches named after the user as the user's own, so a dummy value can only cost an extra confirmation or block on such a branch.
+
+Neither variable alone is enough.
+The server switch without the dummy still sends the login name in the classification request, and the dummy without the server switch still sends the git remotes and branch in every request.
+
+`permissions.defaultMode: "default"` or `disableAutoMode: "disable"` would also stop the context from being sent, by not using auto mode at all, which is why they were rejected.
 
 ## Why `DISABLE_TELEMETRY` and not `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
 
@@ -220,6 +240,11 @@ It is written out so the choice is a decision on record instead of a default nob
 Flip it to `true` only where something else already constrains egress.
 Note that the GrowthBook-default argument above does not apply to this one: it is a deliberate `false`, not a belt over a default.
 
+**`includeGitInstructions: false`** — removes the built-in commit and PR workflow block from the system prompt, and with it the git snapshot that block carries: the git user name, the current branch, the working-tree status, and the recent commits.
+Unlike the rest of this section, the data it holds back goes to the inference API rather than claude.ai, and it was sent long before auto mode existed.
+Asking Claude to commit still works; it reads the repository state with its own `git` calls when the task needs it.
+Two things go away with the instructions: the guidance on how to write commits and PRs, and the `Co-Authored-By` trailer, whose text lives in that block.
+
 ## Audited and deliberately not added
 
 - **Cron / `ScheduleWakeup` / routines.**
@@ -297,8 +322,11 @@ If OTel is on, expect the address to leave through that channel.
   This is the one leak the policy accepts rather than closes; see `skipWebFetchPreflight` in Part 2 for why.
 - Mobile push notifications never arrive, including the permission-prompt-waiting one.
 - Commits and PRs from a web or Remote Control session carry no `Claude-Session` trailer.
-  The `Co-Authored-By` attribution is a separate key and is untouched.
 - Org-managed memory stores are unavailable; `/memories` and the memory tools still work against local files.
+- Each auto-mode action that needs a verdict costs one extra classification request, because classification runs on the client.
+- Commits Claude makes carry no `Co-Authored-By` trailer, and the system prompt no longer describes the commit and PR workflow.
+- `GITHUB_ACTOR` is `user` inside every process Claude Code starts. Anything that reads it outside GitHub Actions sees the dummy.
+- The home and working directory paths still reach the model, through the system prompt's working directory and auto-memory path, so a login name embedded in `/home/<name>` is still visible there. Working outside the home directory with `CLAUDE_CONFIG_DIR` pointed outside it as well avoids this; the policy does not do it because it cannot be set from `settings.json`.
 
 ## Verifying
 
