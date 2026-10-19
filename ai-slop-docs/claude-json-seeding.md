@@ -152,6 +152,10 @@ The judgement then happens in a separate classification request, made only when 
 `GITHUB_ACTOR` comes first, so setting it to a dummy value hides the login name without touching `USER`, which tools and scripts run by the Bash tool still see unchanged.
 The classifier uses the name only to recognise branches named after the user as the user's own, so a dummy value can only cost an extra confirmation or block on such a branch.
 
+The classification request is not free of git details either.
+When the action is a git or gh command that can publish (push, adding or changing a remote, creating or commenting on a PR or issue, creating a release, forking), it carries a line naming the target repository as `owner/repo` and the current branch.
+That happens per such command rather than on every request, and no setting turns it off.
+
 Neither variable alone is enough.
 The server switch without the dummy still sends the login name in the classification request, and the dummy without the server switch still sends the git remotes and branch in every request.
 
@@ -326,6 +330,7 @@ If OTel is on, expect the address to leave through that channel.
 - Each auto-mode action that needs a verdict costs one extra classification request, because classification runs on the client.
 - Commits Claude makes carry no `Co-Authored-By` trailer, and the system prompt no longer describes the commit and PR workflow.
 - `GITHUB_ACTOR` is `user` inside every process Claude Code starts. Anything that reads it outside GitHub Actions sees the dummy.
+- An auto-mode git or gh command that can publish still sends the target repository's `owner/repo` and the current branch to the classifier.
 - The home and working directory paths still reach the model, through the system prompt's working directory and auto-memory path, so a login name embedded in `/home/<name>` is still visible there. Working outside the home directory with `CLAUDE_CONFIG_DIR` pointed outside it as well avoids this; the policy does not do it because it cannot be set from `settings.json`.
 
 ## Verifying

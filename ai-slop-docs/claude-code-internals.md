@@ -259,7 +259,17 @@ function dat(){let e=a.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS;if(e!==void 0)return
   return ut().includeGitInstructions??!0}
 ```
 
+The client-side classifier attaches a `repoVisibility` meta line to exfil-capable git/gh commands, gated by a helper whose env override is not honoured on external builds (`0`, `false` and an empty value were all ignored in a capture), so it falls back to the built-in auto-mode config, which has `repoVisibility:!0`:
+
+```js
+function HTr(){let e=or.CLAUDE_CODE_AUTO_MODE_REPO_VISIBILITY;if(e!==void 0)return e;
+  return S_()?.repoVisibility===!0}
+function S_(){let e=k("tengu_auto_mode_config",Sc)??Sc;if(e!==Sc)return e;
+  return Fm()?Sc:F_o}   // F_o: {…,repoVisibility:!0,gitStatusType:!0,gitStatusUploads:!1,…}
+```
+
 A capture of 2.1.296 and 2.1.303 with the policy applied, a canary login name, git user, remote and branch, and an auto-mode action outside the working directory showed none of the canaries in any request, with the action still classified and run.
+The same capture with `git push` as the action showed the remote and branch in the classification request, as `{"meta":{"repoVisibility":{"remote":"canary-owner/canary-repo","branch":"canary-branch","visibility":"unknown"}}}`; the login name and git user stayed out.
 
 ## Re-running the audit
 
