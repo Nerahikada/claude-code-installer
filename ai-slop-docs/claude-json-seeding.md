@@ -247,7 +247,7 @@ Note that the GrowthBook-default argument above does not apply to this one: it i
 **`includeGitInstructions: false`** — removes the built-in commit and PR workflow block from the system prompt, and with it the git snapshot that block carries: the git user name, the current branch, the working-tree status, and the recent commits.
 Unlike the rest of this section, the data it holds back goes to the inference API rather than claude.ai, and it was sent long before auto mode existed.
 Asking Claude to commit still works; it reads the repository state with its own `git` calls when the task needs it.
-Two things go away with the instructions: the guidance on how to write commits and PRs, and the `Co-Authored-By` trailer, whose text lives in that block.
+Two things go away with the instructions: the guidance on how to write commits and PRs, and the `Co-Authored-By` trailer, whose text arrives in a separate system reminder that is only attached while the git instructions are on.
 
 ## Audited and deliberately not added
 
