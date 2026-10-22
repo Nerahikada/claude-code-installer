@@ -14,6 +14,25 @@
         return $true
     }
 
+    # PowerShell 7 refuses an empty property name, which Claude Code can write into
+    # ~/.claude.json, unless it parses into a hashtable; 5.1 has no such switch.
+    function ConvertFrom-JsonText([string]$Text) {
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            return ConvertFrom-Json -InputObject $Text -AsHashtable
+        }
+        return ConvertFrom-Json -InputObject $Text
+    }
+
+    function Get-JsonEntries($Object) {
+        if ($Object -is [Collections.IDictionary]) {
+            foreach ($key in @($Object.Keys)) {
+                [pscustomobject]@{ Name = $key; Value = $Object[$key] }
+            }
+        } else {
+            $Object.PSObject.Properties | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Value = $_.Value } }
+        }
+    }
+
     function Read-Policy([string]$Source) {
         if ($PSVersionTable.PSEdition -eq 'Desktop') {
             $tls12 = [Net.SecurityProtocolType]::Tls12
@@ -29,11 +48,11 @@
         } else {
             $raw = [string]$content
         }
-        $policy = $raw | ConvertFrom-Json
+        $policy = ConvertFrom-JsonText $raw
         if (-not (Test-JsonObject $policy)) {
             throw "$Source does not hold a JSON object"
         }
-        foreach ($entry in $policy.PSObject.Properties) {
+        foreach ($entry in Get-JsonEntries $policy) {
             if (-not (Test-JsonObject $entry.Value)) {
                 throw "$Source maps ""$($entry.Name)"" to something other than a JSON object"
             }
@@ -50,13 +69,13 @@
 
     function Read-Config([string]$Path) {
         if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-            return New-Object PSObject
+            return [ordered]@{}
         }
         $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
         if ([string]::IsNullOrWhiteSpace($text)) {
-            return New-Object PSObject
+            return [ordered]@{}
         }
-        $doc = $text | ConvertFrom-Json
+        $doc = ConvertFrom-JsonText $text
         if (-not (Test-JsonObject $doc)) {
             throw "$Path does not hold a JSON object"
         }
@@ -64,7 +83,15 @@
     }
 
     function Merge-Policy($Base, $Patch) {
-        foreach ($prop in $Patch.PSObject.Properties) {
+        foreach ($prop in Get-JsonEntries $Patch) {
+            if ($Base -is [Collections.IDictionary]) {
+                if ($Base.Contains($prop.Name) -and (Test-JsonObject $prop.Value) -and (Test-JsonObject $Base[$prop.Name])) {
+                    Merge-Policy $Base[$prop.Name] $prop.Value
+                } else {
+                    $Base[$prop.Name] = $prop.Value
+                }
+                continue
+            }
             $existing = $Base.PSObject.Properties[$prop.Name]
             if ($existing -and (Test-JsonObject $prop.Value) -and (Test-JsonObject $existing.Value)) {
                 Merge-Policy $existing.Value $prop.Value
@@ -99,7 +126,7 @@
         $policy = Read-Policy $PolicyUrl
         Write-Host "policy from $PolicyUrl"
 
-        foreach ($entry in $policy.PSObject.Properties) {
+        foreach ($entry in Get-JsonEntries $policy) {
             $path = Resolve-PolicyPath $entry.Name
             $doc = Read-Config $path
             $before = ConvertTo-Json $doc -Depth 100 -Compress
